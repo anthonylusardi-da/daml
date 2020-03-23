@@ -5,8 +5,8 @@
 -- | Utilities for working with DAML-LF protobuf archives
 module DA.Daml.LF.Proto3.Archive
   ( decodeArchive
-  , decodeArchivePayload
   , decodeArchivePackageId
+  , decodePackage
   , encodeArchive
   , encodeArchiveLazy
   , encodeArchiveAndHash
@@ -49,21 +49,25 @@ data DecodingMode
       -- the id of the package being decoded.
     deriving (Eq, Show)
 
-
--- | Decode a LF archive header, returing the hash and the payload
+-- | Decode an LF archive, returning the package-id and the package
 decodeArchive :: DecodingMode -> BS.ByteString -> Either ArchiveError (LF.PackageId, LF.Package)
 decodeArchive mode bytes = do
-    (packageId, payloadBytes) <- decodeArchivePayload bytes
+    (packageId, payloadBytes) <- decodeArchiveHeader bytes
+    package <- decodePackage mode packageId payloadBytes
+    return (packageId, package)
+
+-- | Decode an LF archive payload, returning the package
+decodePackage :: DecodingMode -> LF.PackageId -> BS.ByteString -> Either ArchiveError LF.Package
+decodePackage mode packageId payloadBytes = do
     let selfPackageRef = case mode of
             DecodeAsMain -> LF.PRSelf
             DecodeAsDependency -> LF.PRImport packageId
-
     payload <- over _Left (ProtobufError . show) $ Proto.fromByteString payloadBytes
-    package <- over _Left (ProtobufError. show) $ Decode.decodePayload selfPackageRef payload
-    return (packageId, package)
+    over _Left (ProtobufError. show) $ Decode.decodePayload selfPackageRef payload
 
-decodeArchivePayload :: BS.ByteString -> Either ArchiveError (LF.PackageId, BS.ByteString)
-decodeArchivePayload bytes = do
+-- | Decode an LF archive header, returning the package-id and the payload
+decodeArchiveHeader :: BS.ByteString -> Either ArchiveError (LF.PackageId, BS.ByteString)
+decodeArchiveHeader bytes = do
     archive <- over _Left (ProtobufError . show) $ Proto.fromByteString bytes
     let payloadBytes = ProtoLF.archivePayload archive
     let archiveHash = TL.toStrict (ProtoLF.archiveHash archive)
@@ -79,8 +83,9 @@ decodeArchivePayload bytes = do
     let packageId = LF.PackageId archiveHash
     pure (packageId, payloadBytes)
 
+-- | Decode an LF archive, returning the package-id
 decodeArchivePackageId :: BS.ByteString -> Either ArchiveError LF.PackageId
-decodeArchivePackageId = fmap fst . decodeArchivePayload
+decodeArchivePackageId = fmap fst . decodeArchiveHeader
 
 -- | Encode a LFv1 package payload into a DAML-LF archive using the default
 -- hash function.
