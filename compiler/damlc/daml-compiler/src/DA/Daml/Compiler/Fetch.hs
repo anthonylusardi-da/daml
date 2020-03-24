@@ -3,33 +3,28 @@
 
 module DA.Daml.Compiler.Fetch (
   LedgerArgs(..), runWithLedgerArgs,
+  createDarFile,
   fetchDar
   ) where
 
 import Control.Lens (toListOf)
 import Data.List.Extra (nubSort)
 import Data.String (fromString)
+import System.Directory.Extra (createDirectoryIfMissing)
+import System.FilePath (takeDirectory)
+import qualified "zip" Codec.Archive.Zip as Zip
+import qualified Data.ByteString as BS
+import qualified Data.ByteString.Lazy as BSL
+import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
 
-import qualified DA.Ledger as L (
-  ClientSSLConfig(..),
-  Host(..),
-  LedgerService,
-  Package(..),
-  PackageId(..),
-  Port(..),
-  TimeoutSeconds,
-  Token,
-  configOfHostAndPort,
-  getLedgerIdentity,
-  getPackage,
-  runLedgerService,
-  setToken,
-  )
-
+import DA.Daml.Compiler.Dar (PackageConfigFields(..),PackageSdkVersion(..),createArchive)
+import Development.IDE.Types.Location (toNormalizedFilePath)
 import qualified DA.Daml.LF.Ast as LF
 import qualified DA.Daml.LF.Ast.Optics as LF (packageRefs)
 import qualified DA.Daml.LF.Proto3.Archive as LFArchive
+import qualified DA.Ledger as L
+import qualified SdkVersion
 
 data LedgerArgs = LedgerArgs
   { host :: String
@@ -41,19 +36,44 @@ data LedgerArgs = LedgerArgs
 instance Show LedgerArgs where
   show LedgerArgs{host,port} = host <> ":" <> show port
 
-data Dar -- TODO
+-- | Create a DAR file by running a ZipArchive action.
+createDarFile :: FilePath -> Zip.ZipArchive () -> IO ()
+createDarFile fp dar = do
+    createDirectoryIfMissing True $ takeDirectory fp
+    Zip.createArchive fp dar
+    putStrLn $ "Created " <> fp
 
+-- | Reconstruct a DAR file by downloading packages from a ledger
 fetchDar :: LedgerArgs -> LF.PackageId -> FilePath -> IO ()
-fetchDar ledgerArgs pid saveAs = do
-  xs <- downloadAllReachablePackages ledgerArgs pid
-  let _ = undefined xs saveAs writeDarToFile encodeAsDar -- TODO
-  return ()
+fetchDar ledgerArgs rootPid saveAs = do
+  xs <- downloadAllReachablePackages ledgerArgs rootPid
+  [pkg] <- pure [ pkg | (pid,pkg) <- xs, pid == rootPid ]
+  let (dalf,pkgId) = LFArchive.encodeArchiveAndHash pkg
 
-writeDarToFile :: Dar -> FilePath -> IO ()
-writeDarToFile = undefined
+  let dalfDependencies :: [(T.Text,BS.ByteString,LF.PackageId)] =
+        [ (txt,bs,pkgId)
+        | (pid,pkg) <- xs, pid /= rootPid
+        , let txt = T.pack "DEP"
+        , let (bsl,pkgId) = LFArchive.encodeArchiveAndHash pkg
+        , let bs = BSL.toStrict bsl
+        ]
 
-encodeAsDar :: LF.PackageId -> [(LF.PackageId,LF.Package)] -> IO Dar
-encodeAsDar = undefined
+  let pName :: LF.PackageName = LF.PackageName $ T.pack "NAME"
+  let pSrc :: String = "SRC"
+  let srcRoot = toNormalizedFilePath "DOT"
+  let pkgConf =
+        PackageConfigFields
+        { pName
+        , pSrc
+        , pExposedModules = Nothing
+        , pVersion = Nothing
+        , pDependencies = []
+        , pDataDependencies = []
+        , pSdkVersion = PackageSdkVersion SdkVersion.sdkVersion
+        }
+  let za = createArchive pkgConf pkgId dalf dalfDependencies srcRoot [] [] []
+  createDarFile saveAs za
+
 
 -- | Download all Packages reachable from a PackageId; fail if any don't exist or can't be decoded.
 downloadAllReachablePackages :: LedgerArgs -> LF.PackageId -> IO [(LF.PackageId,LF.Package)]
@@ -64,9 +84,7 @@ downloadAllReachablePackages ledgerArgs pid = loop [] [pid]
       [] -> return acc
       pid:morePids ->
         if pid `elem` [ pid | (pid,_) <- acc ]
-        then do
-          putStrLn $ "Already Got: " <> show (LF.unPackageId pid)
-          loop acc morePids
+        then loop acc morePids
         else do
           putStrLn $ "Downloading: " <> show (LF.unPackageId pid)
           pkg <- downloadPackage ledgerArgs pid
@@ -83,18 +101,14 @@ downloadPackage ledgerArgs pid = do
         L.getPackage lid $ convPid pid
   runWithLedgerArgs ledgerArgs ls >>= \case
     Nothing -> error $ "Unable to download package with identity: " <> show pid
-    Just pkg -> return $ decodePackageExpect pid pkg
+    Just (L.Package bs) -> do
+      let mode = LFArchive.DecodeAsMain
+      case LFArchive.decodePackage mode pid bs of
+        Left err -> error $ show err
+        Right pkg -> return pkg
   where
     convPid :: LF.PackageId -> L.PackageId
     convPid (LF.PackageId text) = L.PackageId $ TL.fromStrict text
-
-decodePackageExpect :: LF.PackageId -> L.Package -> LF.Package
-decodePackageExpect pid (L.Package bs) = do
-  let mode = LFArchive.DecodeAsMain -- DecodeAsDependency -- ???
-  let either = LFArchive.decodePackage mode pid bs
-  case either of
-    Left err -> error $ show err
-    Right pkg -> pkg
 
 runWithLedgerArgs :: LedgerArgs -> L.LedgerService a -> IO a
 runWithLedgerArgs args ls = do

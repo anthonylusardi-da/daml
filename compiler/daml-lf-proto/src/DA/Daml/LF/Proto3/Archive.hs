@@ -92,10 +92,10 @@ decodeArchivePackageId = fmap fst . decodeArchiveHeader
 encodeArchiveLazy :: LF.Package -> BSL.ByteString
 encodeArchiveLazy = fst . encodeArchiveAndHash
 
-encodePackageHash :: LF.Package -> T.Text
+encodePackageHash :: LF.Package -> LF.PackageId
 encodePackageHash = snd . encodeArchiveAndHash
 
-encodeArchiveAndHash :: LF.Package -> (BSL.ByteString, T.Text)
+encodeArchiveAndHash :: LF.Package -> (BSL.ByteString, LF.PackageId)
 encodeArchiveAndHash package =
     let payload = BSL.toStrict $ Proto.toLazyByteString $ Encode.encodePayload package
         hash = encodeHash (BA.convert (Crypto.hash @_ @Crypto.SHA256 payload) :: BS.ByteString)
@@ -105,7 +105,7 @@ encodeArchiveAndHash package =
           , ProtoLF.archiveHash    = TL.fromStrict hash
           , ProtoLF.archiveHashFunction = Proto.Enumerated (Right ProtoLF.HashFunctionSHA256)
           }
-    in (Proto.toLazyByteString archive, hash)
+    in (Proto.toLazyByteString archive, LF.PackageId hash)
 
 encodeArchive :: LF.Package -> BS.ByteString
 encodeArchive = BSL.toStrict . encodeArchiveLazy

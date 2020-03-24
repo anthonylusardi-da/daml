@@ -2,6 +2,7 @@
 -- SPDX-License-Identifier: Apache-2.0
 module DA.Daml.Compiler.Dar
     ( buildDar
+    , createArchive
     , FromDalf(..)
     , breakAt72Bytes
     , PackageSdkVersion(..)
@@ -147,7 +148,7 @@ buildDar service pkgConf@PackageConfigFields {..} ifDir dalfInput = do
                      error $
                      "The following modules are declared in exposed-modules but are not part of the DALF: " <>
                      show (S.toList missingExposed)
-                 let (dalf, LF.PackageId -> pkgId) = encodeArchiveAndHash pkg
+                 let (dalf,pkgId) = encodeArchiveAndHash pkg
                  -- For now, we don’t include ifaces and hie files in incremental mode.
                  -- The main reason for this is that writeIfacesAndHie is not yet ported to incremental mode
                  -- but it also makes creation of the archive slightly faster and those files are only required

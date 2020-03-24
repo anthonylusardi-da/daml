@@ -10,7 +10,6 @@
 module DA.Cli.Damlc (main) where
 
 import qualified "zip-archive" Codec.Archive.Zip as ZipArchive
-import qualified "zip" Codec.Archive.Zip as Zip
 import Control.Exception
 import Control.Exception.Safe (catchIO)
 import Control.Monad.Except
@@ -24,6 +23,7 @@ import DA.Cli.Damlc.IdeState
 import DA.Cli.Damlc.Packaging
 import DA.Cli.Damlc.Test
 import DA.Daml.Compiler.Dar
+import DA.Daml.Compiler.Fetch (createDarFile)
 import qualified DA.Daml.Compiler.Repl as Repl
 import DA.Daml.Compiler.DocTest
 import DA.Daml.Compiler.Scenario
@@ -573,12 +573,6 @@ initPackageDb opts (InitPkgDb shouldInit) =
             projRoot <- getCurrentDirectory
             withPackageConfig defaultProjectPath $ \PackageConfigFields {..} ->
                 createProjectPackageDb (toNormalizedFilePath projRoot) opts pSdkVersion pDependencies pDataDependencies
-
-createDarFile :: FilePath -> Zip.ZipArchive () -> IO ()
-createDarFile fp dar = do
-    createDirectoryIfMissing True $ takeDirectory fp
-    Zip.createArchive fp dar
-    putStrLn $ "Created " <> fp
 
 execBuild :: ProjectOpts -> Options -> Maybe FilePath -> IncrementalBuild -> InitPkgDb -> Command
 execBuild projectOpts opts mbOutFile incrementalBuild initPkgDb =
