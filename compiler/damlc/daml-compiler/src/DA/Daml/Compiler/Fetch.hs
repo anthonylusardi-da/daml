@@ -19,7 +19,7 @@ import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
 
 import DA.Daml.Compiler.Dar (PackageConfigFields(..),PackageSdkVersion(..),createArchive)
-import Development.IDE.Types.Location (toNormalizedFilePath)
+--import Development.IDE.Types.Location (toNormalizedFilePath)
 import qualified DA.Daml.LF.Ast as LF
 import qualified DA.Daml.LF.Ast.Optics as LF (packageRefs)
 import qualified DA.Daml.LF.Proto3.Archive as LFArchive
@@ -53,14 +53,14 @@ fetchDar ledgerArgs rootPid saveAs = do
   let dalfDependencies :: [(T.Text,BS.ByteString,LF.PackageId)] =
         [ (txt,bs,pkgId)
         | (pid,pkg) <- xs, pid /= rootPid
-        , let txt = T.pack "DEP"
+        , let txt = T.pack ("dep-" <> T.unpack (LF.unPackageId pid))
         , let (bsl,pkgId) = LFArchive.encodeArchiveAndHash pkg
         , let bs = BSL.toStrict bsl
         ]
 
-  let pName :: LF.PackageName = LF.PackageName $ T.pack "NAME"
-  let pSrc :: String = "SRC"
-  let srcRoot = toNormalizedFilePath "DOT"
+  let pName :: LF.PackageName = LF.PackageName $ T.pack "reconstructed"
+  let pSrc :: String = undefined -- "SRC"
+  let srcRoot = undefined -- toNormalizedFilePath "DOT"
   let pkgConf =
         PackageConfigFields
         { pName
