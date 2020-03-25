@@ -11,6 +11,8 @@ import mockConsole from "jest-mock-console";
 
 type Foo = {};
 
+const mockChange = jest.fn();
+
 const Foo: Template<Foo, undefined, "foo-id"> = {
   templateId: "foo-id",
   keyDecoder: () => jtv.constant(undefined),
@@ -54,6 +56,7 @@ const mockOptions = {
 
 afterEach(() => {
   WS.clean();
+  mockChange.mockClear();
 });
 
 describe("streamQuery", () => {
@@ -113,7 +116,6 @@ describe("streamQuery", () => {
   });
 
   test("receive empty events", async () => {
-    let receivedEvents: object[] = [];
     const server = new WS("ws://localhost:4000/v1/stream/query", {
       jsonProtocol: true,
     });
@@ -121,16 +123,16 @@ describe("streamQuery", () => {
     const stream = ledger.streamQuery(Foo);
     await server.connected;
     console.log("connected");
-    stream.on("change", evs => (receivedEvents = [...evs]));
+    stream.on("change", mockChange);
     stream.on("close", ev => console.log(ev));
     stream.off("change", evs => console.log(evs));
     stream.off("close", ev => console.log(ev));
     server.send({ events: [] });
-    expect(receivedEvents).toEqual([]);
+    expect(mockChange).toHaveBeenCalledTimes(1);
+    expect(mockChange).toHaveBeenLastCalledWith([], []);
   });
 
   test("receive one event", async () => {
-    let receivedEvents: object[] = [];
     const server = new WS("ws://localhost:4000/v1/stream/query", {
       jsonProtocol: true,
     });
@@ -138,16 +140,16 @@ describe("streamQuery", () => {
     const stream = ledger.streamQuery(Foo);
     await server.connected;
     console.log("connected");
-    stream.on("change", evs => (receivedEvents = [...evs]));
+    stream.on("change", evs => mockChange(evs));
     stream.on("close", ev => console.log(ev));
     stream.off("change", evs => console.log(evs));
     stream.off("close", ev => console.log(ev));
     server.send({ events: [fooEvent(1)] });
-    expect(receivedEvents).toEqual([fooCreateEvent(1)]);
+    expect(mockChange).toHaveBeenCalledTimes(1);
+    expect(mockChange).toHaveBeenLastCalledWith([fooCreateEvent(1)]);
   });
 
   test("receive several events", async () => {
-    let receivedEvents: object[] = [];
     const server = new WS("ws://localhost:4000/v1/stream/query", {
       jsonProtocol: true,
     });
@@ -155,16 +157,16 @@ describe("streamQuery", () => {
     const stream = ledger.streamQuery(Foo);
     await server.connected;
     console.log("connected");
-    stream.on("change", evs => (receivedEvents = [...evs]));
+    stream.on("change", evs => mockChange(evs));
     stream.on("close", ev => console.log(ev));
     stream.off("change", evs => console.log(evs));
     stream.off("close", ev => console.log(ev));
     server.send({ events: [1, 2, 3].map(fooEvent) });
-    expect(receivedEvents).toEqual([1, 2, 3].map(fooCreateEvent));
+    expect(mockChange).toHaveBeenCalledTimes(1);
+    expect(mockChange).toHaveBeenCalledWith([1, 2, 3].map(fooCreateEvent));
   });
 
   test("drop matching created and archived events", async () => {
-    let receivedEvents: object[] = [];
     const server = new WS("ws://localhost:4000/v1/stream/query", {
       jsonProtocol: true,
     });
@@ -172,18 +174,18 @@ describe("streamQuery", () => {
     const stream = ledger.streamQuery(Foo);
     await server.connected;
     console.log("connected");
-    stream.on("change", evs => (receivedEvents = [...evs]));
+    stream.on("change", evs => mockChange(evs));
     stream.on("close", ev => console.log(ev));
     stream.off("change", evs => console.log(evs));
     stream.off("close", ev => console.log(ev));
     server.send({ events: [fooEvent(1), fooEvent(2), fooArchiveEvent(1)] });
-    expect(receivedEvents).toEqual([fooCreateEvent(2)]);
+    expect(mockChange).toHaveBeenCalledTimes(1);
+    expect(mockChange).toHaveBeenCalledWith([fooCreateEvent(2)]);
   });
 });
 
 describe("streamFetchByKey", () => {
   test("receive no event", async () => {
-    let receivedEvent: object | null = null;
     const server = new WS("ws://localhost:4000/v1/stream/fetch", {
       jsonProtocol: true,
     });
@@ -191,16 +193,16 @@ describe("streamFetchByKey", () => {
     const stream = ledger.streamFetchByKey(Foo, undefined);
     await server.connected;
     console.log("connected");
-    stream.on("change", ev => (receivedEvent = ev));
+    stream.on("change", ev => mockChange(ev));
     stream.on("close", ev => console.log(ev));
     stream.off("change", ev => console.log(ev));
     stream.off("close", ev => console.log(ev));
     server.send({ events: [] });
-    expect(receivedEvent).toEqual(null);
+    expect(mockChange).toHaveBeenCalledTimes(1);
+    expect(mockChange).toHaveBeenCalledWith(null);
   });
 
   test("receive one event", async () => {
-    let receivedEvent: object | null = null;
     const server = new WS("ws://localhost:4000/v1/stream/fetch", {
       jsonProtocol: true,
     });
@@ -208,16 +210,16 @@ describe("streamFetchByKey", () => {
     const stream = ledger.streamFetchByKey(Foo, undefined);
     await server.connected;
     console.log("connected");
-    stream.on("change", ev => (receivedEvent = ev));
+    stream.on("change", ev => mockChange(ev));
     stream.on("close", ev => console.log(ev));
     stream.off("change", ev => console.log(ev));
     stream.off("close", ev => console.log(ev));
     server.send({ events: [fooEvent(1)] });
-    expect(receivedEvent).toEqual(fooCreateEvent(1));
+    expect(mockChange).toHaveBeenCalledTimes(1);
+    expect(mockChange).toHaveBeenCalledWith(fooCreateEvent(1));
   });
 
   test("receive several events", async () => {
-    let receivedEvent: object | null = null;
     const server = new WS("ws://localhost:4000/v1/stream/fetch", {
       jsonProtocol: true,
     });
@@ -225,16 +227,16 @@ describe("streamFetchByKey", () => {
     const stream = ledger.streamFetchByKey(Foo, undefined);
     await server.connected;
     console.log("connected");
-    stream.on("change", ev => (receivedEvent = ev));
+    stream.on("change", ev => mockChange(ev));
     stream.on("close", ev => console.log(ev));
     stream.off("change", ev => console.log(ev));
     stream.off("close", ev => console.log(ev));
     server.send({ events: [fooEvent(1), fooEvent(2), fooEvent(3)] });
-    expect(receivedEvent).toEqual(fooCreateEvent(3));
+    expect(mockChange).toHaveBeenCalledTimes(1);
+    expect(mockChange).toHaveBeenCalledWith(fooCreateEvent(3));
   });
 
   test("drop matching created and archived events", async () => {
-    let receivedEvent: object | null = null;
     const server = new WS("ws://localhost:4000/v1/stream/fetch", {
       jsonProtocol: true,
     });
@@ -242,11 +244,12 @@ describe("streamFetchByKey", () => {
     const stream = ledger.streamFetchByKey(Foo, undefined);
     await server.connected;
     console.log("connected");
-    stream.on("change", ev => (receivedEvent = ev));
+    stream.on("change", ev => mockChange(ev));
     stream.on("close", ev => console.log(ev));
     stream.off("change", evs => console.log(evs));
     stream.off("close", ev => console.log(ev));
     server.send({ events: [fooEvent(1), fooArchiveEvent(1)] });
-    expect(receivedEvent).toEqual(null);
+    expect(mockChange).toHaveBeenCalledTimes(1);
+    expect(mockChange).toHaveBeenCalledWith(null);
   });
 });
