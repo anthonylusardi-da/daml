@@ -13,7 +13,7 @@ const Foo: Template<Foo, undefined, "foo-id"> = {
   templateId: "foo-id",
   keyDecoder: () => jtv.constant(undefined),
   decoder: () => jtv.object({}),
-  Archive: ({} as unknown) as Choice<Foo, {}, {}, undefined>,
+  Archive: {} as unknown as Choice<Foo, {}, {}, undefined>,
 };
 
 const fooCreateEvent = (
@@ -241,4 +241,3 @@ describe("streamFetchByKey", () => {
     expect(receivedEvent).toEqual(null);
   });
 });
-
