@@ -23,12 +23,13 @@
     "cross-fetch": "^3.0.4",
     "events": "^3.1.0",
     "isomorphic-ws": "^4.0.1",
+    "prettier": "^2.0.2",
     "ws": "^7.2.1"
   },
   "scripts": {
     "build": "tsc --build",
     "build:watch": "tsc --build --watch",
-    "test": "true",
+    "test": "jest",
     "lint": "eslint --ext .ts ./ --max-warnings 0"
   },
   "eslintConfig": {
@@ -52,10 +53,16 @@
     }
   },
   "devDependencies": {
+    "@types/jest": "^24.0.23",
     "@types/ws": "^7.2.1",
     "@typescript-eslint/eslint-plugin": "^2.16.0",
     "@typescript-eslint/parser": "^2.16.0",
     "eslint": "^6.8.0",
+    "jest": "^24.9.0",
+    "jest-websocket-mock": "^2.0.2",
+    "mock-socket": "^9.0.3",
+    "socket-mock": "^1.0.1",
+    "ts-jest": "^24.2.0",
     "typescript": "3.7.4"
   }
 }
