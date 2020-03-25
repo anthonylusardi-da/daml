@@ -16,10 +16,6 @@ const Foo: Template<Foo, undefined, "foo-id"> = {
   Archive: ({} as unknown) as Choice<Foo, {}, {}, undefined>,
 };
 
-const fooEvent = (coid: number): Event<Foo, undefined, "foo-id"> => {
-  return { created: fooCreateEvent(coid) };
-};
-
 const fooCreateEvent = (
   coid: number
 ): CreateEvent<Foo, undefined, "foo-id"> => {
@@ -33,6 +29,11 @@ const fooCreateEvent = (
     payload: {},
   };
 };
+
+const fooEvent = (coid: number): Event<Foo, undefined, "foo-id"> => {
+  return { created: fooCreateEvent(coid) };
+};
+
 
 const fooArchiveEvent = (coid: number): Event<Foo, undefined, "foo-id"> => {
   return {
@@ -103,7 +104,7 @@ describe("streamQuery", () => {
   });
 
   test("receive empty events", async () => {
-    var receivedEvents: object[] = [];
+    let receivedEvents: object[] = [];
     const server = new WS("ws://localhost:4000/v1/stream/query", {
       jsonProtocol: true,
     });
@@ -120,7 +121,7 @@ describe("streamQuery", () => {
   });
 
   test("receive one event", async () => {
-    var receivedEvents: object[] = [];
+    let receivedEvents: object[] = [];
     const server = new WS("ws://localhost:4000/v1/stream/query", {
       jsonProtocol: true,
     });
@@ -137,7 +138,7 @@ describe("streamQuery", () => {
   });
 
   test("receive several events", async () => {
-    var receivedEvents: object[] = [];
+    let receivedEvents: object[] = [];
     const server = new WS("ws://localhost:4000/v1/stream/query", {
       jsonProtocol: true,
     });
@@ -154,7 +155,7 @@ describe("streamQuery", () => {
   });
 
   test("drop matching created and archived events", async () => {
-    var receivedEvents: object[] = [];
+    let receivedEvents: object[] = [];
     const server = new WS("ws://localhost:4000/v1/stream/query", {
       jsonProtocol: true,
     });
@@ -173,7 +174,7 @@ describe("streamQuery", () => {
 
 describe("streamFetchByKey", () => {
   test("receive no event", async () => {
-    var receivedEvent: object | null = null;
+    let receivedEvent: object | null = null;
     const server = new WS("ws://localhost:4000/v1/stream/fetch", {
       jsonProtocol: true,
     });
@@ -190,7 +191,7 @@ describe("streamFetchByKey", () => {
   });
 
   test("receive one event", async () => {
-    var receivedEvent: object | null = null;
+    let receivedEvent: object | null = null;
     const server = new WS("ws://localhost:4000/v1/stream/fetch", {
       jsonProtocol: true,
     });
@@ -207,7 +208,7 @@ describe("streamFetchByKey", () => {
   });
 
   test("receive several events", async () => {
-    var receivedEvent: object | null = null;
+    let receivedEvent: object | null = null;
     const server = new WS("ws://localhost:4000/v1/stream/fetch", {
       jsonProtocol: true,
     });
@@ -224,7 +225,7 @@ describe("streamFetchByKey", () => {
   });
 
   test("drop matching created and archived events", async () => {
-    var receivedEvent: object | null = null;
+    let receivedEvent: object | null = null;
     const server = new WS("ws://localhost:4000/v1/stream/fetch", {
       jsonProtocol: true,
     });
