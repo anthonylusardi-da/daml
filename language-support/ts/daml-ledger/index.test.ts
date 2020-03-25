@@ -178,7 +178,11 @@ describe("streamQuery", () => {
     stream.on("close", ev => console.log(ev));
     stream.off("change", evs => console.log(evs));
     stream.off("close", ev => console.log(ev));
-    server.send({ events: [fooEvent(1), fooEvent(2), fooArchiveEvent(1)] });
+    server.send({ events: [fooEvent(1), fooEvent(2)] });
+    expect(mockChange).toHaveBeenCalledTimes(1);
+    expect(mockChange).toHaveBeenCalledWith([fooCreateEvent(1), fooCreateEvent(2)]);
+    mockChange.mockClear();
+    server.send({ events: [fooArchiveEvent(1)]});
     expect(mockChange).toHaveBeenCalledTimes(1);
     expect(mockChange).toHaveBeenCalledWith([fooCreateEvent(2)]);
   });
@@ -248,7 +252,11 @@ describe("streamFetchByKey", () => {
     stream.on("close", ev => console.log(ev));
     stream.off("change", evs => console.log(evs));
     stream.off("close", ev => console.log(ev));
-    server.send({ events: [fooEvent(1), fooArchiveEvent(1)] });
+    server.send({ events: [fooEvent(1)] });
+    expect(mockChange).toHaveBeenCalledTimes(1);
+    expect(mockChange).toHaveBeenCalledWith(fooCreateEvent(1));
+    mockChange.mockClear();
+    server.send({ events: [fooArchiveEvent(1)] });
     expect(mockChange).toHaveBeenCalledTimes(1);
     expect(mockChange).toHaveBeenCalledWith(null);
   });
