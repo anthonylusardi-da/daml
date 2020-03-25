@@ -59,6 +59,7 @@
     "@typescript-eslint/parser": "^2.16.0",
     "eslint": "^6.8.0",
     "jest": "^24.9.0",
+    "jest-mock-console": "^1.0.0",
     "jest-websocket-mock": "^2.0.2",
     "mock-socket": "^9.0.3",
     "socket-mock": "^1.0.1",

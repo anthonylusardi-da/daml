@@ -6,6 +6,8 @@ import WS from "jest-websocket-mock";
 import Ledger from "./index";
 import { Event, CreateEvent } from "./index";
 import * as jtv from "@mojotech/json-type-validation";
+import mockConsole from "jest-mock-console";
+
 
 type Foo = {};
 
@@ -57,6 +59,7 @@ afterEach(() => {
 describe("streamQuery", () => {
   // we only check that nothing crashes.
   test("receive unknown message", async () => {
+    const restoreConsole = mockConsole();
     const server = new WS("ws://localhost:4000/v1/stream/query", {
       jsonProtocol: true,
     });
@@ -64,13 +67,16 @@ describe("streamQuery", () => {
     const stream = ledger.streamQuery(Foo);
     await server.connected;
     console.log("connected");
-    stream.on("change", (evs) => console.log(evs));
-    stream.on("close", (ev) => console.log(ev));
+    stream.on("change", evs => console.log(evs));
+    stream.on("close", ev => console.log(ev));
     server.send("mickey mouse");
+    expect(console.error).toHaveBeenCalledWith("Ledger.streamQuery unknown message", "mickey mouse");
+    restoreConsole();
   });
 
   // we only check that nothing crashes.
   test("receive warnings", async () => {
+    const restoreConsole = mockConsole();
     const server = new WS("ws://localhost:4000/v1/stream/query", {
       jsonProtocol: true,
     });
@@ -78,15 +84,18 @@ describe("streamQuery", () => {
     const stream = ledger.streamQuery(Foo);
     await server.connected;
     console.log("connected");
-    stream.on("change", (evs) => console.log(evs));
-    stream.on("close", (ev) => console.log(ev));
-    stream.off("change", (evs) => console.log(evs));
-    stream.off("close", (ev) => console.log(ev));
+    stream.on("change", evs => console.log(evs));
+    stream.on("close", ev => console.log(ev));
+    stream.off("change", evs => console.log(evs));
+    stream.off("close", ev => console.log(ev));
     server.send({ warnings: ["oh oh"] });
+    expect(console.warn).toHaveBeenCalledWith("Ledger.streamQuery warnings", {"warnings": ["oh oh"]});
+    restoreConsole();
   });
 
   // we only check that nothing crashes.
   test("receive errors", async () => {
+    const restoreConsole = mockConsole();
     const server = new WS("ws://localhost:4000/v1/stream/query", {
       jsonProtocol: true,
     });
@@ -94,11 +103,13 @@ describe("streamQuery", () => {
     const stream = ledger.streamQuery(Foo);
     await server.connected;
     console.log("connected");
-    stream.on("change", (evs) => console.log(evs));
-    stream.on("close", (ev) => console.log(ev));
-    stream.off("change", (evs) => console.log(evs));
-    stream.off("close", (ev) => console.log(ev));
+    stream.on("change", evs => console.log(evs));
+    stream.on("close", ev => console.log(ev));
+    stream.off("change", evs => console.log(evs));
+    stream.off("close", ev => console.log(ev));
     server.send({ errors: ["not good!"] });
+    expect(console.error).toHaveBeenCalledWith("Ledger.streamQuery errors", { errors: ["not good!"] });
+    restoreConsole();
   });
 
   test("receive empty events", async () => {
@@ -110,10 +121,10 @@ describe("streamQuery", () => {
     const stream = ledger.streamQuery(Foo);
     await server.connected;
     console.log("connected");
-    stream.on("change", (evs) => (receivedEvents = [...evs]));
-    stream.on("close", (ev) => console.log(ev));
-    stream.off("change", (evs) => console.log(evs));
-    stream.off("close", (ev) => console.log(ev));
+    stream.on("change", evs => (receivedEvents = [...evs]));
+    stream.on("close", ev => console.log(ev));
+    stream.off("change", evs => console.log(evs));
+    stream.off("close", ev => console.log(ev));
     server.send({ events: [] });
     expect(receivedEvents).toEqual([]);
   });
@@ -127,10 +138,10 @@ describe("streamQuery", () => {
     const stream = ledger.streamQuery(Foo);
     await server.connected;
     console.log("connected");
-    stream.on("change", (evs) => (receivedEvents = [...evs]));
-    stream.on("close", (ev) => console.log(ev));
-    stream.off("change", (evs) => console.log(evs));
-    stream.off("close", (ev) => console.log(ev));
+    stream.on("change", evs => (receivedEvents = [...evs]));
+    stream.on("close", ev => console.log(ev));
+    stream.off("change", evs => console.log(evs));
+    stream.off("close", ev => console.log(ev));
     server.send({ events: [fooEvent(1)] });
     expect(receivedEvents).toEqual([fooCreateEvent(1)]);
   });
@@ -144,10 +155,10 @@ describe("streamQuery", () => {
     const stream = ledger.streamQuery(Foo);
     await server.connected;
     console.log("connected");
-    stream.on("change", (evs) => (receivedEvents = [...evs]));
-    stream.on("close", (ev) => console.log(ev));
-    stream.off("change", (evs) => console.log(evs));
-    stream.off("close", (ev) => console.log(ev));
+    stream.on("change", evs => (receivedEvents = [...evs]));
+    stream.on("close", ev => console.log(ev));
+    stream.off("change", evs => console.log(evs));
+    stream.off("close", ev => console.log(ev));
     server.send({ events: [1, 2, 3].map(fooEvent) });
     expect(receivedEvents).toEqual([1, 2, 3].map(fooCreateEvent));
   });
@@ -161,10 +172,10 @@ describe("streamQuery", () => {
     const stream = ledger.streamQuery(Foo);
     await server.connected;
     console.log("connected");
-    stream.on("change", (evs) => (receivedEvents = [...evs]));
-    stream.on("close", (ev) => console.log(ev));
-    stream.off("change", (evs) => console.log(evs));
-    stream.off("close", (ev) => console.log(ev));
+    stream.on("change", evs => (receivedEvents = [...evs]));
+    stream.on("close", ev => console.log(ev));
+    stream.off("change", evs => console.log(evs));
+    stream.off("close", ev => console.log(ev));
     server.send({ events: [fooEvent(1), fooEvent(2), fooArchiveEvent(1)] });
     expect(receivedEvents).toEqual([fooCreateEvent(2)]);
   });
@@ -180,10 +191,10 @@ describe("streamFetchByKey", () => {
     const stream = ledger.streamFetchByKey(Foo, undefined);
     await server.connected;
     console.log("connected");
-    stream.on("change", (ev) => (receivedEvent = ev));
-    stream.on("close", (ev) => console.log(ev));
-    stream.off("change", (ev) => console.log(ev));
-    stream.off("close", (ev) => console.log(ev));
+    stream.on("change", ev => (receivedEvent = ev));
+    stream.on("close", ev => console.log(ev));
+    stream.off("change", ev => console.log(ev));
+    stream.off("close", ev => console.log(ev));
     server.send({ events: [] });
     expect(receivedEvent).toEqual(null);
   });
@@ -197,10 +208,10 @@ describe("streamFetchByKey", () => {
     const stream = ledger.streamFetchByKey(Foo, undefined);
     await server.connected;
     console.log("connected");
-    stream.on("change", (ev) => (receivedEvent = ev));
-    stream.on("close", (ev) => console.log(ev));
-    stream.off("change", (ev) => console.log(ev));
-    stream.off("close", (ev) => console.log(ev));
+    stream.on("change", ev => (receivedEvent = ev));
+    stream.on("close", ev => console.log(ev));
+    stream.off("change", ev => console.log(ev));
+    stream.off("close", ev => console.log(ev));
     server.send({ events: [fooEvent(1)] });
     expect(receivedEvent).toEqual(fooCreateEvent(1));
   });
@@ -214,10 +225,10 @@ describe("streamFetchByKey", () => {
     const stream = ledger.streamFetchByKey(Foo, undefined);
     await server.connected;
     console.log("connected");
-    stream.on("change", (ev) => (receivedEvent = ev));
-    stream.on("close", (ev) => console.log(ev));
-    stream.off("change", (ev) => console.log(ev));
-    stream.off("close", (ev) => console.log(ev));
+    stream.on("change", ev => (receivedEvent = ev));
+    stream.on("close", ev => console.log(ev));
+    stream.off("change", ev => console.log(ev));
+    stream.off("close", ev => console.log(ev));
     server.send({ events: [fooEvent(1), fooEvent(2), fooEvent(3)] });
     expect(receivedEvent).toEqual(fooCreateEvent(3));
   });
@@ -231,10 +242,10 @@ describe("streamFetchByKey", () => {
     const stream = ledger.streamFetchByKey(Foo, undefined);
     await server.connected;
     console.log("connected");
-    stream.on("change", (ev) => (receivedEvent = ev));
-    stream.on("close", (ev) => console.log(ev));
-    stream.off("change", (evs) => console.log(evs));
-    stream.off("close", (ev) => console.log(ev));
+    stream.on("change", ev => (receivedEvent = ev));
+    stream.on("close", ev => console.log(ev));
+    stream.off("change", evs => console.log(evs));
+    stream.off("close", ev => console.log(ev));
     server.send({ events: [fooEvent(1), fooArchiveEvent(1)] });
     expect(receivedEvent).toEqual(null);
   });
