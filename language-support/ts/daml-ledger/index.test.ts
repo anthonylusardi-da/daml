@@ -66,8 +66,6 @@ describe("streamQuery", () => {
     console.log("connected");
     stream.on("change", (evs) => console.log(evs));
     stream.on("close", (ev) => console.log(ev));
-    stream.off("change", (evs) => console.log(evs));
-    stream.off("close", (ev) => console.log(ev));
     server.send("mickey mouse");
   });
 
