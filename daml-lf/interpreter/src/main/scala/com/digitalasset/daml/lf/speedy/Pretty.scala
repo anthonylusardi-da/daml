@@ -1,21 +1,20 @@
-// Copyright (c) 2020 The DAML Authors. All rights reserved.
+// Copyright (c) 2020 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-package com.digitalasset.daml.lf.speedy
+package com.daml.lf.speedy
 
-import scala.util.Try
 import org.typelevel.paiges._
 import org.typelevel.paiges.Doc._
-import com.digitalasset.daml.lf.value.Value
+import com.daml.lf.value.Value
 import Value._
-import com.digitalasset.daml.lf.transaction.Node._
-import com.digitalasset.daml.lf.types.{Ledger => L}
-import com.digitalasset.daml.lf.data.Ref._
-import com.digitalasset.daml.lf.transaction.Transaction
-import com.digitalasset.daml.lf.speedy.SError._
-import com.digitalasset.daml.lf.speedy.SValue._
-import com.digitalasset.daml.lf.speedy.SBuiltin._
-import com.digitalasset.daml.lf.types.Ledger.CommitError
+import com.daml.lf.transaction.Node._
+import com.daml.lf.types.{Ledger => L}
+import com.daml.lf.data.Ref._
+import com.daml.lf.transaction.Transaction
+import com.daml.lf.speedy.SError._
+import com.daml.lf.speedy.SValue._
+import com.daml.lf.speedy.SBuiltin._
+import com.daml.lf.types.Ledger.CommitError
 
 //
 // Pretty-printer for the interpreter errors and the scenario ledger
@@ -71,11 +70,6 @@ object Pretty {
           text("Expected contract of type") & prettyTypeConName(expected) & text("but got") & prettyTypeConName(
           actual,
         )
-
-      case DamlESubmitterNotInMaintainers(templateId, submitter, maintainers) =>
-        text("Expected the submitter") & prettyParty(submitter) &
-          text("to be in maintainers") & intercalate(comma + space, maintainers.map(prettyParty)) &
-          text("when looking up template of maintainer") & prettyTypeConName(templateId)
     }
 
   // A minimal pretty-print of an update transaction node, without recursing into child nodes..
@@ -83,7 +77,7 @@ object Pretty {
     node match {
       case create: NodeCreate.WithTxValue[ContractId] =>
         "create" &: prettyContractInst(create.coinst)
-      case fetch: NodeFetch[ContractId] =>
+      case fetch: NodeFetch.WithTxValue[ContractId] =>
         "fetch" &: prettyContractId(fetch.coid)
       case ex: NodeExercises.WithTxValue[Transaction.NodeId, ContractId] =>
         intercalate(text(", "), ex.actingParties.map(p => text(p))) &
@@ -261,7 +255,7 @@ object Pretty {
           case None => d
           case Some(key) => d / text("key") & prettyKeyWithMaintainers(key)
         }
-      case ea: NodeFetch[AbsoluteContractId] =>
+      case ea: NodeFetch[AbsoluteContractId, Transaction.Value[AbsoluteContractId]] =>
         "ensure active" &: prettyContractId(ea.coid)
       case ex: NodeExercises[
             L.ScenarioNodeId,
@@ -338,24 +332,17 @@ object Pretty {
 
   def prettyContractId(coid: ContractId): Doc =
     coid match {
-      case AbsoluteContractId(acoid) => text(acoid)
+      case acoid: AbsoluteContractId => text(acoid.coid)
       case RelativeContractId(rcoid) => str(rcoid)
     }
 
-  def prettyActiveContracts(c: L.LedgerData): Doc = {
-    def ltNodeId(a: AbsoluteContractId, b: AbsoluteContractId): Boolean = {
-      val ap = a.coid.drop(1).split(':')
-      val bp = b.coid.drop(1).split(':')
-      Try(ap(0).toInt < bp(0).toInt || (ap(0).toInt == bp(0).toInt && ap(1).toInt < bp(1).toInt))
-        .getOrElse(false)
-    }
+  def prettyActiveContracts(c: L.LedgerData): Doc =
     fill(
       comma + space,
       c.activeContracts.toList
-        .sortWith(ltNodeId)
+        .sortBy(_.toString)
         .map(prettyContractId)
     )
-  }
 
   def prettyPackageId(pkgId: PackageId): Doc =
     text(pkgId.take(8))
@@ -415,7 +402,7 @@ object Pretty {
         }) +
           text(constructor)
       case ValueText(t) => char('"') + text(t) + char('"')
-      case ValueContractId(AbsoluteContractId(acoid)) => text(acoid)
+      case ValueContractId(acoid: AbsoluteContractId) => text(acoid.coid)
       case ValueContractId(RelativeContractId(rcoid)) =>
         char('~') + text(rcoid.toString)
       case ValueUnit => text("<unit>")
@@ -445,8 +432,8 @@ object Pretty {
     // An incomplete pretty-printer for debugging purposes. Exposed
     // via the ':speedy' repl command.
 
-    import com.digitalasset.daml.lf.language.Ast._
-    import com.digitalasset.daml.lf.speedy.SExpr._
+    import com.daml.lf.language.Ast._
+    import com.daml.lf.speedy.SExpr._
     def prettyAlt(index: Int)(alt: SCaseAlt): Doc = {
       val (pat, newIndex) = alt.pattern match {
         case SCPNil => (text("nil"), index)
@@ -467,10 +454,17 @@ object Pretty {
       }
       (pat & text("=>") + lineOrSpace + prettySExpr(newIndex)(alt.body)).nested(2)
     }
+
+    def prettySELoc(loc: SELoc): Doc = loc match {
+      case SELocS(i) => char('S') + str(i)
+      case SELocA(i) => char('A') + str(i)
+      case SELocF(i) => char('F') + str(i)
+    }
+
     def prettySExpr(index: Int)(e: SExpr): Doc =
       e match {
         case SEVar(i) => char('@') + str(index - i)
-        case SEVal(defId, _) =>
+        case SEVal(defId) =>
           str(defId)
         case SEValue(lit) =>
           lit match {
@@ -528,10 +522,12 @@ object Pretty {
 
         case SEMakeClo(fv, n, body) =>
           val prefix = char('[') +
-            intercalate(space, fv.map((v: Int) => str(v))) + char(']') + text("(\\") +
+            intercalate(space, fv.map(prettySELoc)) + char(']') + text("(\\") +
             intercalate(space, (index to n + index - 1).map((v: Int) => str(v))) &
             text("-> ")
           prettySExpr(index + n)(body).tightBracketBy(prefix, char(')'))
+
+        case loc: SELoc => prettySELoc(loc)
 
         case SELet(bounds, body) =>
           // let [a, b, c] in X

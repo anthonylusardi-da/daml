@@ -1,12 +1,10 @@
-// Copyright (c) 2020 The DAML Authors. All rights reserved.
+// Copyright (c) 2020 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-package com.digitalasset.http.util
+package com.daml.http.util
 
-import java.time.Instant
-
-import com.digitalasset.ledger.api.refinements.{ApiTypes => lar}
-import com.digitalasset.ledger.api.{v1 => lav1}
+import com.daml.ledger.api.refinements.{ApiTypes => lar}
+import com.daml.ledger.api.{v1 => lav1}
 import scalaz.syntax.tag._
 
 object Commands {
@@ -67,8 +65,6 @@ object Commands {
       ledgerId: lar.LedgerId,
       applicationId: lar.ApplicationId,
       commandId: lar.CommandId,
-      ledgerEffectiveTime: Instant,
-      maximumRecordTime: Instant,
       party: lar.Party,
       command: lav1.commands.Command.Command
   ): lav1.command_service.SubmitAndWaitRequest = {

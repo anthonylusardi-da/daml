@@ -1,7 +1,7 @@
-// Copyright (c) 2020 The DAML Authors. All rights reserved.
+// Copyright (c) 2020 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-package com.digitalasset.platform.indexer
+package com.daml.platform.indexer
 
 import java.time.Instant
 import java.time.temporal.ChronoUnit.SECONDS
@@ -14,19 +14,20 @@ import ch.qos.logback.classic.Level
 import com.codahale.metrics.MetricRegistry
 import com.daml.ledger.on.memory.InMemoryLedgerReaderWriter
 import com.daml.ledger.participant.state.kvutils.api.KeyValueParticipantState
-import com.daml.ledger.participant.state.v1.Update.Heartbeat
 import com.daml.ledger.participant.state.v1._
-import com.digitalasset.daml.lf.data.Ref
-import com.digitalasset.daml.lf.data.Ref.LedgerString
-import com.digitalasset.logging.LoggingContext
-import com.digitalasset.logging.LoggingContext.newLoggingContext
-import com.digitalasset.platform.configuration.ServerRole
-import com.digitalasset.platform.indexer.RecoveringIndexerIntegrationSpec._
-import com.digitalasset.platform.store.dao.{JdbcLedgerDao, LedgerDao}
-import com.digitalasset.platform.testing.LogCollector
-import com.digitalasset.resources.ResourceOwner
-import com.digitalasset.resources.akka.AkkaResourceOwner
-import com.digitalasset.timer.RetryStrategy
+import com.daml.lf.data.Ref
+import com.daml.lf.data.Ref.LedgerString
+import com.daml.lf.engine.Engine
+import com.daml.logging.LoggingContext
+import com.daml.logging.LoggingContext.newLoggingContext
+import com.daml.metrics.Metrics
+import com.daml.platform.configuration.ServerRole
+import com.daml.platform.indexer.RecoveringIndexerIntegrationSpec._
+import com.daml.platform.store.dao.{JdbcLedgerDao, LedgerDao}
+import com.daml.platform.testing.LogCollector
+import com.daml.resources.ResourceOwner
+import com.daml.resources.akka.AkkaResourceOwner
+import com.daml.timer.RetryStrategy
 import org.mockito.ArgumentMatchers
 import org.mockito.Mockito._
 import org.scalatest.{AsyncWordSpec, BeforeAndAfterEach, Matchers}
@@ -185,14 +186,14 @@ class RecoveringIndexerIntegrationSpec extends AsyncWordSpec with Matchers with 
       materializer <- AkkaResourceOwner.forMaterializer(() => Materializer(actorSystem))
       participantState <- newParticipantState(Some(ledgerId), participantId)(materializer, logCtx)
       _ <- new StandaloneIndexerServer(
-        participantState,
-        IndexerConfig(
+        readService = participantState,
+        config = IndexerConfig(
           participantId,
           jdbcUrl,
           startupMode = IndexerStartupMode.MigrateAndStart,
           restartDelay = restartDelay,
         ),
-        new MetricRegistry,
+        metrics = new Metrics(new MetricRegistry),
       )(materializer, logCtx)
     } yield participantState
   }
@@ -200,7 +201,12 @@ class RecoveringIndexerIntegrationSpec extends AsyncWordSpec with Matchers with 
   private def index(implicit logCtx: LoggingContext): ResourceOwner[LedgerDao] = {
     val jdbcUrl =
       s"jdbc:h2:mem:${getClass.getSimpleName.toLowerCase}-$testId;db_close_delay=-1;db_close_on_exit=false"
-    JdbcLedgerDao.writeOwner(ServerRole.Testing(getClass), jdbcUrl, new MetricRegistry)
+    JdbcLedgerDao.writeOwner(
+      serverRole = ServerRole.Testing(getClass),
+      jdbcUrl = jdbcUrl,
+      eventsPageSize = 100,
+      metrics = new Metrics(new MetricRegistry),
+    )
   }
 }
 
@@ -224,12 +230,15 @@ object RecoveringIndexerIntegrationSpec {
     override def apply(ledgerId: Option[LedgerId], participantId: ParticipantId)(
         implicit materializer: Materializer,
         logCtx: LoggingContext
-    ): ResourceOwner[ParticipantState] =
+    ): ResourceOwner[ParticipantState] = {
+      val metrics = new Metrics(new MetricRegistry)
       new InMemoryLedgerReaderWriter.SingleParticipantOwner(
         ledgerId,
         participantId,
-        new MetricRegistry,
-      ).map(readerWriter => new KeyValueParticipantState(readerWriter, readerWriter))
+        metrics = metrics,
+        engine = Engine()
+      ).map(readerWriter => new KeyValueParticipantState(readerWriter, readerWriter, metrics))
+    }
   }
 
   private object ParticipantStateThatFailsOften extends ParticipantStateFactory {
@@ -245,8 +254,6 @@ object RecoveringIndexerIntegrationSpec {
           doAnswer(invocation => {
             val beginAfter = invocation.getArgument[Option[Offset]](0)
             delegate.stateUpdates(beginAfter).flatMapConcat {
-              case value @ (_, Heartbeat(_)) =>
-                Source.single(value)
               case value @ (offset, _) =>
                 if (lastFailure.isEmpty || lastFailure.get < offset) {
                   lastFailure = Some(offset)

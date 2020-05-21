@@ -1,20 +1,21 @@
-// Copyright (c) 2020 The DAML Authors. All rights reserved.
+// Copyright (c) 2020 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-package com.digitalasset.daml.lf.speedy
+package com.daml.lf
+package speedy
 
 import java.util
 
-import com.digitalasset.daml.lf.data.Ref._
-import com.digitalasset.daml.lf.PureCompiledPackages
-import com.digitalasset.daml.lf.data.{FrontStack, Ref}
-import com.digitalasset.daml.lf.language.Ast
-import com.digitalasset.daml.lf.language.Ast._
-import com.digitalasset.daml.lf.speedy.SError.SError
-import com.digitalasset.daml.lf.speedy.SResult.{SResultContinue, SResultError}
-import com.digitalasset.daml.lf.speedy.SValue._
-import com.digitalasset.daml.lf.testing.parser.Implicits._
-import com.digitalasset.daml.lf.validation.Validation
+import com.daml.lf.data.Ref._
+import com.daml.lf.PureCompiledPackages
+import com.daml.lf.data.{FrontStack, Ref, Time}
+import com.daml.lf.language.Ast
+import com.daml.lf.language.Ast._
+import com.daml.lf.speedy.SError.SError
+import com.daml.lf.speedy.SResult.{SResultFinalValue, SResultError}
+import com.daml.lf.speedy.SValue._
+import com.daml.lf.testing.parser.Implicits._
+import com.daml.lf.validation.Validation
 import org.scalactic.Equality
 import org.scalatest.{Matchers, WordSpec}
 
@@ -22,6 +23,48 @@ class SpeedyTest extends WordSpec with Matchers {
 
   import SpeedyTest._
   import defaultParserParameters.{defaultPackageId => pkgId}
+
+  val pkgs = typeAndCompile(p"")
+
+  "application arguments" should {
+    "be handled correctly" in {
+      eval(
+        e"""
+        (\ (a: Int64) (b: Int64) -> SUB_INT64 a b) 88 33
+      """,
+        pkgs
+        // Test should fail if we get the order of the function arguments wrong.
+      ) shouldEqual Right(SInt64(55))
+    }
+  }
+
+  "stack variables" should {
+    "be handled correctly" in {
+      eval(
+        e"""
+        let a : Int64 = 88 in
+        let b : Int64 = 33 in
+        SUB_INT64 a b
+      """,
+        pkgs
+        // Test should fail if we access the stack with incorrect indexing.
+      ) shouldEqual Right(SInt64(55))
+    }
+  }
+
+  "free variables" should {
+    "be handled correctly" in {
+      eval(
+        e"""
+        (\(a : Int64) ->
+         let b : Int64 = 33 in
+         (\ (x: Unit) -> SUB_INT64 a b) ()) 88
+      """,
+        pkgs
+        // Test should fail if we index free-variables of a closure incorrectly.
+      ) shouldEqual Right(SInt64(55))
+    }
+  }
 
   "pattern matching" should {
 
@@ -250,19 +293,19 @@ object SpeedyTest {
   private def eval(e: Expr, packages: PureCompiledPackages): Either[SError, SValue] = {
     val machine = Speedy.Machine.fromExpr(
       expr = e,
-      checkSubmitterInMaintainers = true,
       compiledPackages = packages,
       scenario = false,
+      submissionTime = Time.Timestamp.now(),
+      initialSeeding = InitialSeeding.NoSeed,
     )
     final case class Goodbye(e: SError) extends RuntimeException("", null, false, false)
     try {
-      while (!machine.isFinal) machine.step() match {
-        case SResultContinue => ()
+      val value = machine.run() match {
+        case SResultFinalValue(v) => v
         case SResultError(err) => throw Goodbye(err)
         case res => throw new RuntimeException(s"Got unexpected interpretation result $res")
       }
-
-      Right(machine.toSValue)
+      Right(value)
     } catch {
       case Goodbye(err) => Left(err)
     }

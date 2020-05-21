@@ -16,10 +16,12 @@ let shared = rec {
     gzip
     imagemagick
     jdk8
+    jekyll
     jq
     netcat-gnu
     nodejs
     openssl
+    gnupatch
     patchelf
     postgresql_9_6
     protobuf3_8
@@ -106,12 +108,15 @@ let shared = rec {
       titlesec
       tocbibind
       todonotes
+      transparent
       trimspaces
       varwidth
       wrapfig
       xargs
     ;
   };
+
+  z3 = pkgs.z3;
 
   bazel-cc-toolchain = pkgs.callPackage ./tools/bazel-cc-toolchain {};
 };

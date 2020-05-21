@@ -1,4 +1,4 @@
--- Copyright (c) 2020 The DAML Authors. All rights reserved.
+-- Copyright (c) 2020 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
 -- SPDX-License-Identifier: Apache-2.0
 
 {-# LANGUAGE DeriveAnyClass #-}
@@ -18,10 +18,6 @@ data Version
 
 data MinorVersion = PointStable Int | PointDev
   deriving (Eq, Data, Generic, NFData, Ord, Show)
-
--- | DAML-LF version 1.5
-version1_5 :: Version
-version1_5 = V1 $ PointStable 5
 
 -- | DAML-LF version 1.6
 version1_6 :: Version
@@ -47,7 +43,7 @@ supportedOutputVersions :: [Version]
 supportedOutputVersions = [version1_6, version1_7, version1_8, versionDev]
 
 supportedInputVersions :: [Version]
-supportedInputVersions = version1_5 : supportedOutputVersions
+supportedInputVersions = supportedOutputVersions
 
 
 data Feature = Feature
@@ -128,6 +124,7 @@ allFeatures =
     [ featureNumeric
     , featureAnyType
     , featureTypeRep
+    , featureTypeSynonyms
     , featureStringInterning
     , featureGenericComparison
     , featureGenMap

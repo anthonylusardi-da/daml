@@ -1,4 +1,4 @@
-# Copyright (c) 2020 The DAML Authors. All rights reserved.
+# Copyright (c) 2020 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
 load(
@@ -12,10 +12,6 @@ navigator_scalacopts = [
     "-Xelide-below",
     "CONFIG",
     "-Xsource:2.13",
-]
-
-common_jvm_flags = [
-    "-Xmx2G",
 ]
 
 # All frontend resource files.
@@ -40,7 +36,7 @@ java_library(
 da_scala_library(
     name = "navigator-library",
     srcs = glob([
-        "src/main/scala/com/digitalasset/navigator/**/*.scala",
+        "src/main/scala/**/*.scala",
     ]),
     scalacopts = navigator_scalacopts,
     visibility = ["//visibility:public"],
@@ -126,9 +122,9 @@ da_scala_library(
 
 da_scala_binary(
     name = "navigator-binary",
-    main_class = "com.digitalasset.navigator.NavigatorBackend",
+    main_class = "com.daml.navigator.NavigatorBackend",
     tags = [
-        "maven_coordinates=com.digitalasset:navigator:__VERSION__",
+        "maven_coordinates=com.daml:navigator:__VERSION__",
         "no_scala_version_suffix",
     ],
     visibility = [

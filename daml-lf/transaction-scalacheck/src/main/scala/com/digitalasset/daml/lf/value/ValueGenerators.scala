@@ -1,21 +1,16 @@
-// Copyright (c) 2020 The DAML Authors. All rights reserved.
+// Copyright (c) 2020 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-package com.digitalasset.daml.lf
+package com.daml.lf
 package value
 
-import com.digitalasset.daml.lf.data.Ref._
-import com.digitalasset.daml.lf.data._
-import com.digitalasset.daml.lf.transaction.Node.{
-  KeyWithMaintainers,
-  NodeCreate,
-  NodeExercises,
-  NodeFetch
-}
-import com.digitalasset.daml.lf.transaction.VersionTimeline.Implicits._
-import com.digitalasset.daml.lf.transaction.{Transaction => Tx}
-import com.digitalasset.daml.lf.transaction._
-import com.digitalasset.daml.lf.value.Value._
+import com.daml.lf.data.Ref._
+import com.daml.lf.data._
+import com.daml.lf.transaction.Node.{KeyWithMaintainers, NodeCreate, NodeExercises, NodeFetch}
+import com.daml.lf.transaction.VersionTimeline.Implicits._
+import com.daml.lf.transaction.{Transaction => Tx}
+import com.daml.lf.transaction._
+import com.daml.lf.value.Value._
 import org.scalacheck.{Arbitrary, Gen}
 import Arbitrary.arbitrary
 
@@ -24,8 +19,6 @@ import scalaz.syntax.apply._
 import scalaz.scalacheck.ScalaCheckBinding._
 
 object ValueGenerators {
-
-  import Ref.LedgerString.{assertFromString => toContractId}
 
   //generate decimal values
   def numGen(scale: Numeric.Scale): Gen[Numeric] = {
@@ -111,6 +104,7 @@ object ValueGenerators {
             else (variantId: Identifier) => Some(variantId))
       value <- Gen.lzy(valueGen(nesting))
     } yield ValueVariant(toOption(id), variantName, value)
+
   def variantGen: Gen[ValueVariant[ContractId]] = variantGen(0)
 
   private def recordGen(nesting: Int): Gen[ValueRecord[ContractId]] =
@@ -125,16 +119,19 @@ object ValueGenerators {
       labelledValues <- Gen.listOf(nameGen.flatMap(label =>
         Gen.lzy(valueGen(nesting)).map(x => if (label.isEmpty) (None, x) else (Some(label), x))))
     } yield ValueRecord[ContractId](toOption(id), ImmArray(labelledValues))
+
   def recordGen: Gen[ValueRecord[ContractId]] = recordGen(0)
 
   private def valueOptionalGen(nesting: Int): Gen[ValueOptional[ContractId]] =
     Gen.option(valueGen(nesting)).map(v => ValueOptional(v))
+
   def valueOptionalGen: Gen[ValueOptional[ContractId]] = valueOptionalGen(0)
 
   private def valueListGen(nesting: Int): Gen[ValueList[ContractId]] =
     for {
       values <- Gen.listOf(Gen.lzy(valueGen(nesting)))
     } yield ValueList[ContractId](FrontStack(values))
+
   def valueListGen: Gen[ValueList[ContractId]] = valueListGen(0)
 
   private def valueMapGen(nesting: Int) =
@@ -143,6 +140,7 @@ object ValueGenerators {
         k <- Gen.asciiPrintableStr; v <- Gen.lzy(valueGen(nesting))
       } yield k -> v)
     } yield ValueTextMap[ContractId](SortedLookupList(Map(list: _*)))
+
   def valueMapGen: Gen[ValueTextMap[ContractId]] = valueMapGen(0)
 
   private def valueGenMapGen(nesting: Int) =
@@ -154,13 +152,42 @@ object ValueGenerators {
 
   private val genRel: Gen[ContractId] =
     Arbitrary.arbInt.arbitrary.map(i => RelativeContractId(Tx.NodeId(i)))
-  private val genAbsV0: Gen[ContractId] =
-    Gen.zip(Gen.alphaChar, Gen.alphaStr) map {
-      case (h, t) => AbsoluteContractId(toContractId(h +: t))
+  private val genHash: Gen[crypto.Hash] =
+    Gen
+      .containerOfN[Array, Byte](crypto.Hash.underlyingHashLength, arbitrary[Byte]) map crypto.Hash.assertFromByteArray
+  private val genSuffixes: Gen[Bytes] = for {
+    sz <- Gen.chooseNum(0, AbsoluteContractId.V1.maxSuffixLength)
+    ab <- Gen.containerOfN[Array, Byte](sz, arbitrary[Byte])
+  } yield Bytes fromByteArray ab
+
+  val absCoidV0Gen: Gen[AbsoluteContractId.V0] =
+    Gen.alphaStr.map(t => Value.AbsoluteContractId.V0.assertFromString('#' +: t))
+  private val genAbsCidV1: Gen[AbsoluteContractId.V1] =
+    Gen.zip(genHash, genSuffixes) map {
+      case (h, b) => AbsoluteContractId.V1.assertBuild(h, b)
     }
 
+  def absCoidGen: Gen[AbsoluteContractId] = Gen.oneOf(absCoidV0Gen, genAbsCidV1)
+
+  /** Universes of totally-ordered AbsoluteContractIds. */
+  def comparableAbsCoidsGen: Seq[Gen[AbsoluteContractId]] =
+    Seq(
+      Gen.oneOf(
+        absCoidV0Gen,
+        Gen.zip(genAbsCidV1, arbitrary[Byte]) map {
+          case (b1, b) =>
+            AbsoluteContractId.V1
+              .assertBuild(
+                b1.discriminator,
+                if (b1.suffix.nonEmpty) b1.suffix else Bytes fromByteArray Array(b)
+              )
+        }
+      ),
+      Gen.oneOf(absCoidV0Gen, genAbsCidV1 map (cid => AbsoluteContractId.V1(cid.discriminator))),
+    )
+
   def coidGen: Gen[ContractId] =
-    Gen.frequency((1, genRel), (3, genAbsV0))
+    Gen.frequency((1, genRel), (3, absCoidV0Gen))
 
   def coidValueGen: Gen[ValueContractId[ContractId]] =
     coidGen.map(ValueContractId(_))
@@ -252,17 +279,18 @@ object ValueGenerators {
       signatories <- genNonEmptyParties
       stakeholders <- genNonEmptyParties
       key <- Gen.option(keyWithMaintainersGen)
-    } yield NodeCreate(None, coid, coinst, None, signatories, stakeholders, key)
+    } yield NodeCreate(coid, coinst, None, signatories, stakeholders, key)
   }
 
-  val fetchNodeGen: Gen[NodeFetch[ContractId]] = {
+  val fetchNodeGen: Gen[NodeFetch.WithTxValue[ContractId]] = {
     for {
       coid <- coidGen
       templateId <- idGen
       actingParties <- genNonEmptyParties
       signatories <- genNonEmptyParties
       stakeholders <- genNonEmptyParties
-    } yield NodeFetch(coid, templateId, None, Some(actingParties), signatories, stakeholders)
+      key <- Gen.option(keyWithMaintainersGen)
+    } yield NodeFetch(coid, templateId, None, Some(actingParties), signatories, stakeholders, key)
   }
 
   /** Makes exercise nodes with some random child IDs. */
@@ -286,7 +314,6 @@ object ValueGenerators {
       maintainers <- genNonEmptyParties
     } yield
       NodeExercises(
-        None,
         targetCoid,
         templateId,
         choiceId,
@@ -412,10 +439,7 @@ object ValueGenerators {
       disclosed1 <- nodePartiesGen
       disclosed2 <- nodePartiesGen
       divulged <- Gen.mapOf(
-        Gen
-          .nonEmptyListOf(Gen.alphaChar)
-          .map(s => AbsoluteContractId(toContractId(s.mkString)))
-          .flatMap(c => genMaybeEmptyParties.map(ps => (c, ps))))
+        absCoidV0Gen.flatMap(c => genMaybeEmptyParties.map(ps => (c: AbsoluteContractId) -> ps)))
     } yield BlindingInfo(disclosed1, disclosed2, divulged)
   }
 

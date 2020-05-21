@@ -1,4 +1,4 @@
-// Copyright (c) 2020 The DAML Authors. All rights reserved.
+// Copyright (c) 2020 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
 package com.daml.ledger.rxjava;
@@ -14,7 +14,7 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * An RxJava version of {@link com.digitalasset.ledger.api.v1.CommandSubmissionServiceGrpc}
+ * An RxJava version of {@link com.daml.ledger.api.v1.CommandSubmissionServiceGrpc}
  */
 public interface CommandSubmissionClient {
 

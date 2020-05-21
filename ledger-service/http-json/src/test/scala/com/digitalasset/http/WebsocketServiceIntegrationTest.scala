@@ -1,24 +1,27 @@
-// Copyright (c) 2020 The DAML Authors. All rights reserved.
+// Copyright (c) 2020 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-package com.digitalasset.http
+package com.daml.http
 
 import akka.NotUsed
 import akka.http.scaladsl.Http
-import akka.http.scaladsl.model.headers.{Authorization, OAuth2BearerToken}
 import akka.http.scaladsl.model.ws.{BinaryMessage, Message, TextMessage, WebSocketRequest}
 import akka.http.scaladsl.model.{StatusCode, StatusCodes, Uri}
 import akka.stream.scaladsl.{Flow, Keep, Sink, Source}
-import com.digitalasset.http.json.{DomainJsonEncoder, SprayJson}
-import com.digitalasset.http.util.TestUtil
+import com.daml.http.json.{DomainJsonEncoder, SprayJson}
+import com.daml.http.util.TestUtil
+import HttpServiceTestFixture.UseTls
 import com.typesafe.scalalogging.StrictLogging
+import org.scalacheck.Gen
 import org.scalatest._
 import scalaz.{-\/, \/, \/-}
 import scalaz.std.option._
+import scalaz.std.vector._
 import scalaz.syntax.apply._
 import scalaz.syntax.tag._
+import scalaz.syntax.traverse._
 import scalaz.syntax.std.option._
-import spray.json.{JsNull, JsString, JsValue}
+import spray.json.{JsNull, JsObject, JsString, JsValue}
 
 import scala.concurrent.duration._
 import scala.concurrent.{Await, Future}
@@ -39,29 +42,30 @@ class WebsocketServiceIntegrationTest
 
   override def staticContentConfig: Option[StaticContentConfig] = None
 
-  private val headersWithAuth = List(Authorization(OAuth2BearerToken(jwt.value)))
+  override def useTls = UseTls.NoTls
 
-  private val baseQueryFlow: Flow[Message, Message, NotUsed] =
-    Flow.fromSinkAndSource(Sink.foreach(println), Source.single(TextMessage.Strict("{}")))
+  private val baseQueryInput: Source[Message, NotUsed] =
+    Source.single(TextMessage.Strict("""{"templateIds": ["Account:Account"]}"""))
 
   private val fetchRequest =
     """[{"templateId": "Account:Account", "key": ["Alice", "abc123"]}]"""
 
-  private val baseFetchFlow: Flow[Message, Message, NotUsed] =
-    Flow.fromSinkAndSource(Sink.foreach(println), Source.single(TextMessage.Strict(fetchRequest)))
+  private val baseFetchInput: Source[Message, NotUsed] =
+    Source.single(TextMessage.Strict(fetchRequest))
 
   private val validSubprotocol = Option(s"""$tokenPrefix${jwt.value},$wsProtocol""")
 
   List(
-    SimpleScenario("query", Uri.Path("/v1/stream/query"), baseQueryFlow),
-    SimpleScenario("fetch", Uri.Path("/v1/stream/fetch"), baseFetchFlow)
+    SimpleScenario("query", Uri.Path("/v1/stream/query"), baseQueryInput),
+    SimpleScenario("fetch", Uri.Path("/v1/stream/fetch"), baseFetchInput)
   ).foreach { scenario =>
     s"${scenario.id} request with valid protocol token should allow client subscribe to stream" in withHttpService {
       (uri, _, _) =>
         wsConnectRequest(
           uri.copy(scheme = "ws").withPath(scenario.path),
           validSubprotocol,
-          scenario.flow)._1 flatMap (x => x.response.status shouldBe StatusCodes.SwitchingProtocols)
+          scenario.input)._1 flatMap (x =>
+          x.response.status shouldBe StatusCodes.SwitchingProtocols)
     }
 
     s"${scenario.id} request with invalid protocol token should be denied" in withHttpService {
@@ -69,8 +73,7 @@ class WebsocketServiceIntegrationTest
         wsConnectRequest(
           uri.copy(scheme = "ws").withPath(scenario.path),
           Option("foo"),
-          scenario.flow
-        )._1 flatMap (x => x.response.status shouldBe StatusCodes.Unauthorized)
+          scenario.input)._1 flatMap (x => x.response.status shouldBe StatusCodes.Unauthorized)
     }
 
     s"${scenario.id} request without protocol token should be denied" in withHttpService {
@@ -78,15 +81,78 @@ class WebsocketServiceIntegrationTest
         wsConnectRequest(
           uri.copy(scheme = "ws").withPath(scenario.path),
           None,
-          scenario.flow
+          scenario.input
         )._1 flatMap (x => x.response.status shouldBe StatusCodes.Unauthorized)
+    }
+
+    s"two ${scenario.id} requests over the same WebSocket connection are NOT allowed" in withHttpService {
+      (uri, _, _) =>
+        val input = scenario.input.mapConcat(x => List(x, x))
+        val webSocketFlow =
+          Http().webSocketClientFlow(
+            WebSocketRequest(
+              uri = uri.copy(scheme = "ws").withPath(scenario.path),
+              subprotocol = validSubprotocol))
+        input
+          .via(webSocketFlow)
+          .runWith(collectResultsAsTextMessageSkipOffsetTicks)
+          .flatMap { msgs =>
+            inside(msgs) {
+              case Seq(errorMsg) =>
+                val error = decodeErrorResponse(errorMsg)
+                error shouldBe domain.ErrorResponse(
+                  List("Multiple requests over the same WebSocket connection are not allowed."),
+                  None,
+                  StatusCodes.BadRequest
+                )
+            }
+          }
     }
   }
 
-  private val collectResultsAsTextMessageSkipHeartbeats: Sink[Message, Future[Seq[String]]] =
+  List(
+    SimpleScenario(
+      "query",
+      Uri.Path("/v1/stream/query"),
+      Source.single(TextMessage.Strict("""{"templateIds": ["AA:BB"]}"""))),
+    SimpleScenario(
+      "fetch",
+      Uri.Path("/v1/stream/fetch"),
+      Source.single(TextMessage.Strict("""[{"templateId": "AA:BB", "key": ["k", "v"]}]""")))
+  ).foreach { scenario =>
+    s"${scenario.id} report UnknownTemplateIds and error when cannot resolve any template ID" in withHttpService {
+      (uri, _, _) =>
+        val webSocketFlow =
+          Http().webSocketClientFlow(
+            WebSocketRequest(
+              uri = uri.copy(scheme = "ws").withPath(scenario.path),
+              subprotocol = validSubprotocol))
+        scenario.input
+          .via(webSocketFlow)
+          .runWith(collectResultsAsTextMessageSkipOffsetTicks)
+          .flatMap { msgs =>
+            inside(msgs) {
+              case Seq(warningMsg, errorMsg) =>
+                val warning = decodeServiceWarning(warningMsg)
+                inside(warning) {
+                  case domain.UnknownTemplateIds(ids) =>
+                    ids shouldBe List(domain.TemplateId(None, "AA", "BB"))
+                }
+                val error = decodeErrorResponse(errorMsg)
+                error shouldBe domain.ErrorResponse(
+                  List(ErrorMessages.cannotResolveAnyTemplateId),
+                  None,
+                  StatusCodes.BadRequest
+                )
+            }
+          }
+    }
+  }
+
+  private val collectResultsAsTextMessageSkipOffsetTicks: Sink[Message, Future[Seq[String]]] =
     Flow[Message]
       .collect { case m: TextMessage => m.getStrictText }
-      .filterNot(isHeartbeat)
+      .filterNot(isOffsetTick)
       .toMat(Sink.seq)(Keep.right)
 
   private val collectResultsAsTextMessage: Sink[Message, Future[Seq[String]]] =
@@ -94,14 +160,15 @@ class WebsocketServiceIntegrationTest
       .collect { case m: TextMessage => m.getStrictText }
       .toMat(Sink.seq)(Keep.right)
 
-  private def singleClientQueryStream(
+  private def singleClientWSStream(
+      path: String,
       serviceUri: Uri,
       query: String,
-      offset: Option[domain.Offset] = None): Source[Message, NotUsed] = {
+      offset: Option[domain.Offset]): Source[Message, NotUsed] = {
     import spray.json._, json.JsonProtocol._
-    val uri = serviceUri.copy(scheme = "ws").withPath(Uri.Path("/v1/stream/query"))
+    val uri = serviceUri.copy(scheme = "ws").withPath(Uri.Path(s"/v1/stream/$path"))
     logger.info(
-      s"---- singleClientQueryStream uri: ${uri.toString}, query: $query, offset: ${offset.toString}")
+      s"---- singleClientWSStream uri: ${uri.toString}, query: $query, offset: ${offset.toString}")
     val webSocketFlow =
       Http().webSocketClientFlow(WebSocketRequest(uri = uri, subprotocol = validSubprotocol))
     offset
@@ -114,17 +181,17 @@ class WebsocketServiceIntegrationTest
       .via(webSocketFlow)
   }
 
+  private def singleClientQueryStream(
+      serviceUri: Uri,
+      query: String,
+      offset: Option[domain.Offset] = None): Source[Message, NotUsed] =
+    singleClientWSStream("query", serviceUri, query, offset)
+
   private def singleClientFetchStream(
       serviceUri: Uri,
-      request: String): Source[Message, NotUsed] = {
-    val uri = serviceUri.copy(scheme = "ws").withPath(Uri.Path("/v1/stream/fetch"))
-    logger.info(s"---- singleClientFetchStream uri: ${uri.toString}, request: $request")
-    val webSocketFlow =
-      Http().webSocketClientFlow(WebSocketRequest(uri = uri, subprotocol = validSubprotocol))
-    Source
-      .single(TextMessage(request))
-      .via(webSocketFlow)
-  }
+      request: String,
+      offset: Option[domain.Offset] = None): Source[Message, NotUsed] =
+    singleClientWSStream("fetch", serviceUri, request, offset)
 
   private def initialIouCreate(serviceUri: Uri) = {
     val payload = TestUtil.readFile("it/iouCreateCommand.json")
@@ -212,7 +279,7 @@ class WebsocketServiceIntegrationTest
   "query endpoint should send error msg when receiving malformed message" in withHttpService {
     (uri, _, _) =>
       val clientMsg = singleClientQueryStream(uri, "{}")
-        .runWith(collectResultsAsTextMessageSkipHeartbeats)
+        .runWith(collectResultsAsTextMessageSkipOffsetTicks)
 
       val result = Await.result(clientMsg, 10.seconds)
 
@@ -225,7 +292,7 @@ class WebsocketServiceIntegrationTest
   "fetch endpoint should send error msg when receiving malformed message" in withHttpService {
     (uri, _, _) =>
       val clientMsg = singleClientFetchStream(uri, """[abcdefg!]""")
-        .runWith(collectResultsAsTextMessageSkipHeartbeats)
+        .runWith(collectResultsAsTextMessageSkipOffsetTicks)
 
       val result = Await.result(clientMsg, 10.seconds)
 
@@ -246,11 +313,13 @@ class WebsocketServiceIntegrationTest
   // this test code, e.g. in a browser with a JavaScript client, so will leave this
   // mystery to be explored another time.
 
-  private val baseExercisePayload = {
-    import spray.json._
-    """{"templateId": "Iou:Iou",
-        "choice": "Iou_Split",
-        "argument": {"splitAmount": 42.42}}""".parseJson.asJsObject
+  private def exercisePayload(cid: domain.ContractId, amount: BigDecimal = BigDecimal("42.42")) = {
+    import spray.json._, json.JsonProtocol._
+    Map(
+      "templateId" -> "Iou:Iou".toJson,
+      "contractId" -> cid.toJson,
+      "choice" -> "Iou_Split".toJson,
+      "argument" -> Map("splitAmount" -> amount).toJson).toJson
   }
 
   "query should receive deltas as contracts are archived/created" in withHttpService {
@@ -259,10 +328,6 @@ class WebsocketServiceIntegrationTest
 
       val initialCreate = initialIouCreate(uri)
 
-      def exercisePayload(cid: String) =
-        baseExercisePayload.copy(
-          fields = baseExercisePayload.fields updated ("contractId", JsString(cid)))
-
       val query =
         """[
           {"templateIds": ["Iou:Iou"], "query": {"amount": {"%lte": 50}}},
@@ -270,65 +335,64 @@ class WebsocketServiceIntegrationTest
           {"templateIds": ["Iou:Iou"]}
         ]"""
 
-      def resp(iouCid: domain.ContractId): Sink[JsValue, Future[StreamState]] =
-        Sink
-          .foldAsync(NothingYet: StreamState) {
-            case (NothingYet, ContractDelta(Vector((ctid, _)), Vector(), None)) =>
-              (ctid: String) shouldBe (iouCid.unwrap: String)
+      def resp(iouCid: domain.ContractId): Sink[JsValue, Future[ShouldHaveEnded]] = {
+        val dslSyntax = Consume.syntax[JsValue]
+        import dslSyntax._
+        Consume.interpret(
+          for {
+            ContractDelta(Vector((ctid, _)), Vector(), None) <- readOne
+            _ = (ctid: String) shouldBe (iouCid.unwrap: String)
+            _ <- liftF(
               TestUtil.postJsonRequest(
                 uri.withPath(Uri.Path("/v1/exercise")),
-                exercisePayload(ctid),
+                exercisePayload(domain.ContractId(ctid)),
                 headersWithAuth) map {
                 case (statusCode, _) =>
                   statusCode.isSuccess shouldBe true
-                  GotAcs(ctid)
-              }
+              })
 
-            case (GotAcs(ctid), ContractDelta(Vector(), _, Some(offset))) =>
-              Future.successful(GotLive(offset, ctid))
+            ContractDelta(Vector(), _, Some(offset)) <- readOne
 
-            case (
-                GotLive(preOffset, consumedCtid),
-                evtsWrapper @ ContractDelta(
-                  Vector((fstId, fst), (sndId, snd)),
-                  Vector(observeConsumed),
-                  Some(lastSeenOffset)
-                )) =>
-              Future {
-                observeConsumed.contractId should ===(consumedCtid)
-                Set(fstId, sndId, consumedCtid) should have size 3
-                inside(evtsWrapper) {
-                  case JsObject(obj) =>
-                    inside(obj get "events") {
-                      case Some(
-                          JsArray(
-                            Vector(
-                              Archived(_, _),
-                              Created(IouAmount(amt1), MatchedQueries(NumList(ixes1), _)),
-                              Created(IouAmount(amt2), MatchedQueries(NumList(ixes2), _))))) =>
-                        Set((amt1, ixes1), (amt2, ixes2)) should ===(
-                          Set(
-                            (BigDecimal("42.42"), Vector(BigDecimal(0), BigDecimal(2))),
-                            (BigDecimal("957.57"), Vector(BigDecimal(1), BigDecimal(2))),
-                          ))
-                    }
-                }
-                ShouldHaveEnded(preOffset, 2, lastSeenOffset)
+            (preOffset, consumedCtid) = (offset, ctid)
+            evtsWrapper @ ContractDelta(
+              Vector((fstId, fst), (sndId, snd)),
+              Vector(observeConsumed),
+              Some(lastSeenOffset)
+            ) <- readOne
+            (liveStartOffset, msgCount) = {
+              observeConsumed.contractId should ===(consumedCtid)
+              Set(fstId, sndId, consumedCtid) should have size 3
+              inside(evtsWrapper) {
+                case JsObject(obj) =>
+                  inside(obj get "events") {
+                    case Some(
+                        JsArray(
+                          Vector(
+                            Archived(_, _),
+                            Created(IouAmount(amt1), MatchedQueries(NumList(ixes1), _)),
+                            Created(IouAmount(amt2), MatchedQueries(NumList(ixes2), _))))) =>
+                      Set((amt1, ixes1), (amt2, ixes2)) should ===(
+                        Set(
+                          (BigDecimal("42.42"), Vector(BigDecimal(0), BigDecimal(2))),
+                          (BigDecimal("957.57"), Vector(BigDecimal(1), BigDecimal(2))),
+                        ))
+                  }
               }
+              (preOffset, 2)
+            }
 
-            case (
-                ShouldHaveEnded(liveStartOffset, msgCount, lastSeenOffset),
-                ContractDelta(Vector(), Vector(), Some(currentOffset))
-                ) =>
-              Future {
-                // don't count empty events block if lastSeenOffset does not change
-                ShouldHaveEnded(
-                  liveStartOffset = liveStartOffset,
-                  msgCount = if (lastSeenOffset == currentOffset) msgCount else msgCount + 1,
-                  lastSeenOffset = currentOffset
-                )
-              }
-          }
+            heartbeats <- drain
+            hbCount = (heartbeats.iterator.map {
+              case ContractDelta(Vector(), Vector(), Some(currentOffset)) => currentOffset
+            }.toSet + lastSeenOffset).size - 1
+          } yield
+          // don't count empty events block if lastSeenOffset does not change
+          ShouldHaveEnded(
+            liveStartOffset = liveStartOffset,
+            msgCount = msgCount + hbCount,
+            lastSeenOffset = lastSeenOffset
+          ))
+      }
 
       for {
         creation <- initialCreate
@@ -337,8 +401,7 @@ class WebsocketServiceIntegrationTest
         lastState <- singleClientQueryStream(uri, query) via parseResp runWith resp(iouCid)
         liveOffset = inside(lastState) {
           case ShouldHaveEnded(liveStart, 2, lastSeen) =>
-            import domain.Offset.ordering
-            lastSeen should be > liveStart
+            lastSeen.unwrap should be > liveStart.unwrap
             liveStart
         }
         rescan <- (singleClientQueryStream(uri, query, Some(liveOffset))
@@ -353,7 +416,14 @@ class WebsocketServiceIntegrationTest
   "fetch should receive deltas as contracts are archived/created, filtering out phantom archives" in withHttpService {
     (uri, encoder, _) =>
       val templateId = domain.TemplateId(None, "Account", "Account")
-      val fetchRequest = """[{"templateId": "Account:Account", "key": ["Alice", "abc123"]}]"""
+      def fetchRequest(contractIdAtOffset: Option[Option[domain.ContractId]] = None) = {
+        import spray.json._, json.JsonProtocol._
+        List(
+          Map("templateId" -> "Account:Account".toJson, "key" -> List("Alice", "abc123").toJson)
+            ++ contractIdAtOffset
+              .map(ocid => contractIdAtOffsetKey -> ocid.toJson)
+              .toList).toJson.compactPrint
+      }
       val f1 =
         postCreateCommand(accountCreateCommand(domain.Party("Alice"), "abc123"), encoder, uri)
       val f2 =
@@ -361,50 +431,46 @@ class WebsocketServiceIntegrationTest
 
       def resp(
           cid1: domain.ContractId,
-          cid2: domain.ContractId): Sink[JsValue, Future[StreamState]] =
-        Sink.foldAsync(NothingYet: StreamState) {
-
-          case (
-              NothingYet,
-              ContractDelta(Vector((cid, c)), Vector(), None)
-              ) =>
-            (cid: String) shouldBe (cid1.unwrap: String)
-            postArchiveCommand(templateId, cid2, encoder, uri).flatMap {
+          cid2: domain.ContractId): Sink[JsValue, Future[ShouldHaveEnded]] = {
+        val dslSyntax = Consume.syntax[JsValue]
+        import dslSyntax._
+        Consume.interpret(
+          for {
+            ContractDelta(Vector((cid, c)), Vector(), None) <- readOne
+            _ = (cid: String) shouldBe (cid1.unwrap: String)
+            ctid <- liftF(postArchiveCommand(templateId, cid2, encoder, uri).flatMap {
               case (statusCode, _) =>
                 statusCode.isSuccess shouldBe true
                 postArchiveCommand(templateId, cid1, encoder, uri).map {
                   case (statusCode, _) =>
                     statusCode.isSuccess shouldBe true
-                    GotAcs(cid)
+                    cid
                 }
-            }: Future[StreamState]
+            })
 
-          case (GotAcs(ctid), ContractDelta(Vector(), _, Some(offset))) =>
-            Future.successful(GotLive(offset, ctid))
+            ContractDelta(Vector(), _, Some(offset)) <- readOne
+            (off, archivedCid) = (offset, ctid)
 
-          case (
-              GotLive(off, archivedCid),
-              ContractDelta(Vector(), Vector(observeArchivedCid), Some(lastSeenOffset))
-              ) =>
-            Future {
+            ContractDelta(Vector(), Vector(observeArchivedCid), Some(lastSeenOffset)) <- readOne
+            (liveStartOffset, msgCount) = {
               (observeArchivedCid.contractId.unwrap: String) shouldBe (archivedCid: String)
               (observeArchivedCid.contractId: domain.ContractId) shouldBe (cid1: domain.ContractId)
-              ShouldHaveEnded(off, 0, lastSeenOffset)
+              (off, 0)
             }
 
-          case (
-              ShouldHaveEnded(liveStartOffset, msgCount, lastSeenOffset),
-              ContractDelta(Vector(), Vector(), Some(currentOffset))
-              ) =>
-            Future {
-              // don't count empty events block if lastSeenOffset does not change
-              ShouldHaveEnded(
-                liveStartOffset = liveStartOffset,
-                msgCount = if (lastSeenOffset == currentOffset) msgCount else msgCount + 1,
-                lastSeenOffset = currentOffset
-              )
-            }
-        }
+            heartbeats <- drain
+            hbCount = (heartbeats.iterator.map {
+              case ContractDelta(Vector(), Vector(), Some(currentOffset)) => currentOffset
+            }.toSet + lastSeenOffset).size - 1
+
+          } yield
+          // don't count empty events block if lastSeenOffset does not change
+          ShouldHaveEnded(
+            liveStartOffset = liveStartOffset,
+            msgCount = msgCount + hbCount,
+            lastSeenOffset = lastSeenOffset
+          ))
+      }
 
       for {
         r1 <- f1
@@ -415,22 +481,34 @@ class WebsocketServiceIntegrationTest
         _ = r2._1 shouldBe 'success
         cid2 = getContractId(getResult(r2._2))
 
-        lastState <- singleClientFetchStream(uri, fetchRequest).via(parseResp) runWith resp(
-          cid1,
-          cid2)
+        lastState <- singleClientFetchStream(uri, fetchRequest())
+          .via(parseResp) runWith resp(cid1, cid2)
 
-      } yield
-        inside(lastState) {
+        liveOffset = inside(lastState) {
           case ShouldHaveEnded(liveStart, 0, lastSeen) =>
-            import domain.Offset.ordering
-            lastSeen should be > liveStart
+            lastSeen.unwrap should be > liveStart.unwrap
+            liveStart
         }
+
+        // check contractIdAtOffsets' effects on phantom filtering
+        resumes <- Future.traverse(Seq((None, 2L), (Some(None), 0L), (Some(Some(cid1)), 1L))) {
+          case (abcHint, expectArchives) =>
+            (singleClientFetchStream(uri, fetchRequest(abcHint), Some(liveOffset))
+              via parseResp runWith remainingDeltas)
+              .map {
+                case (creates, archives, _) =>
+                  creates shouldBe empty
+                  archives should have size expectArchives
+              }
+        }
+
+      } yield resumes.foldLeft(1 shouldBe 1)((_, a) => a)
   }
 
   "fetch should should return an error if empty list of (templateId, key) pairs is passed" in withHttpService {
     (uri, _, _) =>
       singleClientFetchStream(uri, "[]")
-        .runWith(collectResultsAsTextMessageSkipHeartbeats)
+        .runWith(collectResultsAsTextMessageSkipOffsetTicks)
         .map { clientMsgs =>
           inside(clientMsgs) {
             case Seq(errorMsg) =>
@@ -438,17 +516,139 @@ class WebsocketServiceIntegrationTest
               errorResponse.status shouldBe StatusCodes.BadRequest
               inside(errorResponse.errors) {
                 case List(error) =>
-                  error should include("must be a list with at least 1 element")
+                  error should include("must be a JSON array with at least 1 element")
               }
           }
         }: Future[Assertion]
   }
 
+  "query on a bunch of random splits should yield consistent results" in withHttpService {
+    (uri, _, _) =>
+      val splitSample = SplitSeq.gen.map(_ map (BigDecimal(_))).sample.get
+      val query =
+        """[
+          {"templateIds": ["Iou:Iou"]}
+        ]"""
+      singleClientQueryStream(uri, query)
+        .via(parseResp)
+        .map(iouSplitResult)
+        .filterNot(_ == \/-((Vector(), Vector()))) // liveness marker/heartbeat
+        .runWith(Consume.interpret(trialSplitSeq(uri, splitSample)))
+  }
+
+  private def trialSplitSeq(
+      serviceUri: Uri,
+      ss: SplitSeq[BigDecimal]): Consume.FCC[IouSplitResult, Assertion] = {
+    val dslSyntax = Consume.syntax[IouSplitResult]
+    import dslSyntax._, SplitSeq._
+    def go(
+        createdCid: domain.ContractId,
+        ss: SplitSeq[BigDecimal]): Consume.FCC[IouSplitResult, Assertion] = ss match {
+      case Leaf(x) =>
+        point(1 shouldBe 1)
+      case Node(x, l, r) =>
+        for {
+          (StatusCodes.OK, _) <- liftF(
+            TestUtil.postJsonRequest(
+              serviceUri.withPath(Uri.Path("/v1/exercise")),
+              exercisePayload(createdCid, l.x),
+              headersWithAuth))
+
+          \/-((Vector((cid1, amt1), (cid2, amt2)), Vector(archival))) <- readOne
+          (lCid, rCid) = {
+            archival should ===(createdCid)
+            Set(amt1, amt2) should ===(Set(l.x, r.x))
+            if (amt1 == l.x) (cid1, cid2) else (cid2, cid1)
+          }
+
+          _ <- go(lCid, l)
+          last <- go(rCid, r)
+        } yield last
+    }
+
+    val initialPayload = {
+      import spray.json._, json.JsonProtocol._
+      Map(
+        "templateId" -> "Iou:Iou".toJson,
+        "payload" -> Map(
+          "observers" -> List[String]().toJson,
+          "issuer" -> "Alice".toJson,
+          "amount" -> ss.x.toJson,
+          "currency" -> "USD".toJson,
+          "owner" -> "Alice".toJson).toJson
+      ).toJson
+    }
+    for {
+      (StatusCodes.OK, _) <- liftF(
+        TestUtil.postJsonRequest(
+          serviceUri.withPath(Uri.Path("/v1/create")),
+          initialPayload,
+          headersWithAuth))
+      \/-((Vector((genesisCid, amt)), Vector())) <- readOne
+      _ = amt should ===(ss.x)
+      last <- go(genesisCid, ss)
+    } yield last
+  }
+
+  private def iouSplitResult(jsv: JsValue): IouSplitResult = jsv match {
+    case ContractDelta(creates, archives, _) =>
+      creates traverse {
+        case (cid, JsObject(fields)) =>
+          fields get "amount" collect {
+            case JsString(amt) => (domain.ContractId(cid), BigDecimal(amt))
+          }
+        case _ => None
+      } map ((_, archives map (_.contractId))) toRightDisjunction jsv
+    case _ => -\/(jsv)
+  }
+
+  "ContractKeyStreamRequest" - {
+    import spray.json._, json.JsonProtocol._
+    val baseVal =
+      domain.EnrichedContractKey(domain.TemplateId(Some("ab"), "cd", "ef"), JsString("42"): JsValue)
+    val baseMap = baseVal.toJson.asJsObject.fields
+    val withSome = JsObject(baseMap + (contractIdAtOffsetKey -> JsString("hi")))
+    val withNone = JsObject(baseMap + (contractIdAtOffsetKey -> JsNull))
+
+    "initial JSON reader" - {
+      type T = domain.ContractKeyStreamRequest[Unit, JsValue]
+
+      "shares EnrichedContractKey format" in {
+        JsObject(baseMap).convertTo[T] should ===(domain.ContractKeyStreamRequest((), baseVal))
+      }
+
+      "errors on contractIdAtOffset presence" in {
+        a[DeserializationException] shouldBe thrownBy {
+          withSome.convertTo[T]
+        }
+        a[DeserializationException] shouldBe thrownBy {
+          withNone.convertTo[T]
+        }
+      }
+    }
+
+    "resuming JSON reader" - {
+      type T = domain.ContractKeyStreamRequest[Option[Option[domain.ContractId]], JsValue]
+
+      "shares EnrichedContractKey format" in {
+        JsObject(baseMap).convertTo[T] should ===(domain.ContractKeyStreamRequest(None, baseVal))
+      }
+
+      "distinguishes null and string" in {
+        withSome.convertTo[T] should ===(domain.ContractKeyStreamRequest(Some(Some("hi")), baseVal))
+        withNone.convertTo[T] should ===(domain.ContractKeyStreamRequest(Some(None), baseVal))
+      }
+    }
+  }
+
   private def wsConnectRequest[M](
       uri: Uri,
       subprotocol: Option[String],
-      flow: Flow[Message, Message, M]) =
-    Http().singleWebSocketRequest(WebSocketRequest(uri = uri, subprotocol = subprotocol), flow)
+      input: Source[Message, NotUsed]) =
+    Http().singleWebSocketRequest(
+      request = WebSocketRequest(uri = uri, subprotocol = subprotocol),
+      clientFlow = dummyFlow(input)
+    )
 
   private val parseResp: Flow[Message, JsValue, NotUsed] = {
     import spray.json._
@@ -488,7 +688,7 @@ class WebsocketServiceIntegrationTest
         }
     }
 
-  private def isHeartbeat(str: String): Boolean =
+  private def isOffsetTick(str: String): Boolean =
     SprayJson
       .decode[EventsBlock](str)
       .map { b =>
@@ -502,16 +702,27 @@ class WebsocketServiceIntegrationTest
       }
       .valueOr(_ => false)
 
-  private def decodeErrorResponse(str: String): domain.ErrorResponse[List[String]] = {
+  private def decodeErrorResponse(str: String): domain.ErrorResponse = {
     import json.JsonProtocol._
-    inside(SprayJson.decode1[domain.ErrorResponse, List[String]](str)) {
+    inside(SprayJson.decode[domain.ErrorResponse](str)) {
       case \/-(e) => e
+    }
+  }
+
+  private def decodeServiceWarning(str: String): domain.ServiceWarning = {
+    import json.JsonProtocol._
+    inside(SprayJson.decode[domain.AsyncWarningsWrapper](str)) {
+      case \/-(w) => w.warnings
     }
   }
 }
 
 object WebsocketServiceIntegrationTest {
   import spray.json._
+
+  @SuppressWarnings(Array("org.wartremover.warts.Any"))
+  def dummyFlow[A](source: Source[A, NotUsed]): Flow[A, A, NotUsed] =
+    Flow.fromSinkAndSource(Sink.foreach(println), source)
 
   @SuppressWarnings(Array("org.wartremover.warts.Any"))
   private def foldWhile[S, A, T](zero: S)(f: (S, A) => (S \/ T)): Sink[A, Future[Option[T]]] =
@@ -524,21 +735,14 @@ object WebsocketServiceIntegrationTest {
       .collect { case \/-(t) => t }
       .toMat(Sink.headOption)(Keep.right)
 
-  private case class SimpleScenario(
-      id: String,
-      path: Uri.Path,
-      flow: Flow[Message, Message, NotUsed])
+  private val contractIdAtOffsetKey = "contractIdAtOffset"
 
-  private sealed abstract class StreamState extends Product with Serializable
-  private case object NothingYet extends StreamState
-  private final case class GotAcs(firstCid: String) extends StreamState
-  private final case class GotLive(liveStartOff: domain.Offset, firstCid: String)
-      extends StreamState
+  private case class SimpleScenario(id: String, path: Uri.Path, input: Source[Message, NotUsed])
+
   private final case class ShouldHaveEnded(
       liveStartOffset: domain.Offset,
       msgCount: Int,
       lastSeenOffset: domain.Offset)
-      extends StreamState
 
   private object ContractDelta {
     private val tagKeys = Set("created", "archived", "error")
@@ -604,5 +808,46 @@ object WebsocketServiceIntegrationTest {
   private object EventsBlock {
     import DefaultJsonProtocol._
     implicit val EventsBlockFormat: RootJsonFormat[EventsBlock] = jsonFormat2(EventsBlock.apply)
+  }
+
+  type IouSplitResult =
+    JsValue \/ (Vector[(domain.ContractId, BigDecimal)], Vector[domain.ContractId])
+
+  sealed abstract class SplitSeq[+X] extends Product with Serializable {
+    import SplitSeq._
+    def x: X
+
+    def fold[Z](leaf: X => Z, node: (X, Z, Z) => Z): Z = {
+      def go(self: SplitSeq[X]): Z = self match {
+        case Leaf(x) => leaf(x)
+        case Node(x, l, r) => node(x, go(l), go(r))
+      }
+      go(this)
+    }
+
+    def map[B](f: X => B): SplitSeq[B] =
+      fold[SplitSeq[B]](x => Leaf(f(x)), (x, l, r) => Node(f(x), l, r))
+  }
+
+  object SplitSeq {
+    final case class Leaf[+X](x: X) extends SplitSeq[X]
+    final case class Node[+X](x: X, l: SplitSeq[X], r: SplitSeq[X]) extends SplitSeq[X]
+
+    type Amount = Long
+
+    val gen: Gen[SplitSeq[Amount]] =
+      Gen.posNum[Amount] flatMap (x => Gen.sized(genSplit(x, _)))
+
+    private def genSplit(x: Amount, size: Int): Gen[SplitSeq[Amount]] =
+      if (size > 1 && x > 1)
+        Gen.frequency(
+          (1, Gen const Leaf(x)),
+          (8 min size, Gen.chooseNum(1: Amount, x - 1) flatMap { split =>
+            Gen zip (genSplit(split, size / 2), genSplit(x - split, size / 2)) map {
+              case (l, r) => Node(x, l, r)
+            }
+          })
+        )
+      else Gen const Leaf(x)
   }
 }

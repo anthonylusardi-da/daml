@@ -1,4 +1,4 @@
-# Copyright (c) 2020 The DAML Authors. All rights reserved.
+# Copyright (c) 2020 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
 # hlint configuration file
@@ -193,7 +193,7 @@
     - warn: {lhs: intersectBy (==), rhs: intersect}
     - warn: {lhs: maximumBy compare, rhs: maximum}
     - warn: {lhs: minimumBy compare, rhs: minimum}
-    - warn: {lhs: nubBy (==), rhs: nub}
+    - warn: {lhs: dedupBy compare, rhs: dedup}
     - warn: {lhs: sortBy compare, rhs: sort}
     - warn: {lhs: unionBy (==), rhs: union}
 
@@ -239,10 +239,11 @@
     - warn: {lhs: identity x, rhs: x, side: not (isTypeApp x)}
     - warn: {lhs: identity . x, rhs: x, name: Redundant identity}
     - warn: {lhs: x . identity, rhs: x, name: Redundant identity}
-    - warn: {lhs: "((,) x)", rhs: "(_noParen_ x,)", name: Use tuple-section, note: RequiresExtension TupleSections}
-    - warn: {lhs: "flip (,) x", rhs: "(,_noParen_ x)", name: Use tuple-section, note: RequiresExtension TupleSections}
-    - warn: {lhs: "\\y -> (x,y)", rhs: "(x,)", name: Use tuple-section, note: RequiresExtension TupleSections}
-    - warn: {lhs: "\\y -> (y,x)", rhs: "(,x)", name: Use tuple-section, note: RequiresExtension TupleSections}
+    # Disabled since we do not want to confuse users with more syntax than necessary.
+    # - warn: {lhs: "((,) x)", rhs: "(_noParen_ x,)", name: Use tuple-section, note: RequiresExtension TupleSections}
+    # - warn: {lhs: "flip (,) x", rhs: "(,_noParen_ x)", name: Use tuple-section, note: RequiresExtension TupleSections}
+    # - warn: {lhs: "\\y -> (x,y)", rhs: "(x,)", name: Use tuple-section, note: RequiresExtension TupleSections}
+    # - warn: {lhs: "\\y -> (y,x)", rhs: "(,x)", name: Use tuple-section, note: RequiresExtension TupleSections}
 
     # CHAR
 
@@ -391,13 +392,10 @@
 
     # MONAD LIST
 
-    - warn: {lhs: fmap unzip (mapA f x), rhs: DA.Action.mapAndUnzipM f x}
-    - warn: {lhs: sequence (zipWith f x y), rhs: DA.Action.zipWithM f x y}
-    - warn: {lhs: sequence_ (zipWith f x y), rhs: DA.Action.zipWithM_ f x y}
-    - warn: {lhs: sequence (replicate n x), rhs: DA.Action.replicateM n x}
-    - warn: {lhs: sequence_ (replicate n x), rhs: DA.Action.replicateM_ n x}
-    - warn: {lhs: mapA f (replicate n x), rhs: DA.Action.replicateM n (f x)}
-    - warn: {lhs: mapA_ f (replicate n x), rhs: DA.Action.replicateM_ n (f x)}
+    - warn: {lhs: sequence (replicate n x), rhs: DA.Action.replicateA n x}
+    - warn: {lhs: sequence_ (replicate n x), rhs: DA.Action.replicateA_ n x}
+    - warn: {lhs: mapA f (replicate n x), rhs: DA.Action.replicateA n (f x)}
+    - warn: {lhs: mapA_ f (replicate n x), rhs: DA.Action.replicateA_ n (f x)}
     - warn: {lhs: mapA f (map g x), rhs: mapA (f . g) x, name: Fuse mapA/map}
     - warn: {lhs: mapA_ f (map g x), rhs: mapA_ (f . g) x, name: Fuse mapA_/map}
     - warn: {lhs: traverse f (map g x), rhs: traverse (f . g) x, name: Fuse traverse/map}
@@ -675,3 +673,6 @@
 # Not helpful for beginner DAML programmers
 - ignore: {name: Eta reduce}
 - ignore: {name: Avoid lambda}
+# Disabled to avoid introducing even more syntax.
+- ignore: {name: Use tuple-section}
+- ignore: {name: Use lambda-case}

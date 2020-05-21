@@ -1,11 +1,11 @@
-// Copyright (c) 2020 The DAML Authors. All rights reserved.
+// Copyright (c) 2020 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
 package com.daml.ledger.participant.state.v1
 
 import java.io.InputStream
 
-import com.digitalasset.daml.lf.data.{Bytes, Ref}
+import com.daml.lf.data.{Bytes, Ref}
 
 /** Offsets into streams with hierarchical addressing.
   *
@@ -23,7 +23,7 @@ import com.digitalasset.daml.lf.data.{Bytes, Ref}
   */
 final case class Offset(bytes: Bytes) extends Ordered[Offset] {
   override def compare(that: Offset): Int =
-    Bytes.`Bytes Ordering`.compare(this.bytes, that.bytes)
+    Bytes.ordering.compare(this.bytes, that.bytes)
 
   def toByteArray: Array[Byte] = bytes.toByteArray
 

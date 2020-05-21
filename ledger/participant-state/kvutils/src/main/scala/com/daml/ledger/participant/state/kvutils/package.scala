@@ -1,9 +1,10 @@
-// Copyright (c) 2020 The DAML Authors. All rights reserved.
+// Copyright (c) 2020 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
 package com.daml.ledger.participant.state
 
 import com.daml.ledger.participant.state.kvutils.DamlKvutils.{DamlStateKey, DamlStateValue}
+import com.daml.metrics.MetricName
 import com.google.protobuf.ByteString
 
 /** The participant-state key-value utilities provide methods to succinctly implement
@@ -27,8 +28,11 @@ import com.google.protobuf.ByteString
   * with them separately, even though both log entries and DAML state values may live in the same storage.
   */
 package object kvutils {
+
   type Bytes = ByteString
 
   type DamlStateMap = Map[DamlStateKey, Option[DamlStateValue]]
+
+  val MetricPrefix: MetricName = MetricName.DAML :+ "kvutils"
 
 }

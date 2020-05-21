@@ -1,11 +1,11 @@
-// Copyright (c) 2020 The DAML Authors. All rights reserved.
+// Copyright (c) 2020 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
-package com.digitalasset.daml.lf.data
+package com.daml.lf.data
 
 import java.io.{StringReader, StringWriter}
 
 import com.google.common.io.{BaseEncoding, ByteStreams}
-import scalaz.Equal
+import scalaz.{Equal, Order}
 
 sealed trait StringModule[T] {
 
@@ -91,7 +91,7 @@ sealed abstract class IdString {
     * transactionId, ... We use the same type for those ids, because we
     * construct some by concatenating the others.
     */
-  type LedgerString <: ContractIdString
+  type LedgerString <: String
 
   /** Identifiers for contracts */
   type ContractIdString <: String
@@ -104,12 +104,13 @@ sealed abstract class IdString {
   val PackageId: ConcatenableStringModule[PackageId, HexString]
   val ParticipantId: StringModule[ParticipantId]
   val LedgerString: ConcatenableStringModule[LedgerString, HexString]
-  val ContractIdString: ConcatenableStringModule[ContractIdString, HexString]
+  val ContractIdString: StringModule[ContractIdString]
 }
 
 object IdString {
-  import Ref.Name
-  implicit def `Name equal instance`: Equal[Name] = Name.equalInstance
+  import Ref.{Name, Party}
+  implicit def `Name order instance`: Order[Name] = Order fromScalaOrdering Name.ordering
+  implicit def `Party order instance`: Order[Party] = Order fromScalaOrdering Party.ordering
 }
 
 private sealed abstract class StringModuleImpl extends StringModule[String] {
@@ -154,13 +155,17 @@ private object HexStringModuleImpl extends StringModuleImpl with HexStringModule
     Bytes.fromInputStream(baseEncode.decodingStream(new StringReader(a)))
 }
 
-private final class MatchingStringModule(string_regex: String) extends StringModuleImpl {
+private final class MatchingStringModule(description: String, string_regex: String)
+    extends StringModuleImpl {
 
   private val regex = string_regex.r
   private val pattern = regex.pattern
 
   override def fromString(s: String): Either[String, T] =
-    Either.cond(pattern.matcher(s).matches(), s, s"""string "$s" does not match regex "$regex"""")
+    Either.cond(
+      pattern.matcher(s).matches(),
+      s,
+      s"""$description "$s" does not match regex "$regex"""")
 
 }
 
@@ -175,20 +180,21 @@ private final class MatchingStringModule(string_regex: String) extends StringMod
   * ids.
   */
 private final class ConcatenableMatchingStringModule(
+    description: String,
     extraAllowedChars: Char => Boolean,
-    maxLength: Int = Int.MaxValue
+    maxLength: Int = Int.MaxValue,
 ) extends StringModuleImpl
     with ConcatenableStringModule[String, String] {
 
   override def fromString(s: String): Either[String, T] =
     if (s.isEmpty)
-      Left(s"""empty string""")
+      Left(s"""$description is empty""")
     else if (s.length > maxLength)
-      Left(s"""string too long""")
+      Left(s"""$description is too long""")
     else
       s.find(c => c > 0x7f || !(c.isLetterOrDigit || extraAllowedChars(c)))
         .fold[Either[String, T]](Right(s))(c =>
-          Left(s"""non expected character 0x${c.toInt.toHexString} in "$s""""))
+          Left(s"""non expected character 0x${c.toInt.toHexString} in $description "$s""""))
 
   override def fromLong(i: Long): T = i.toString
 
@@ -219,34 +225,34 @@ private[data] final class IdStringImpl extends IdString {
   // In a language like C# you'll need to use some other unicode char for `$`.
   override type Name = String
   override val Name: StringModule[Name] =
-    new MatchingStringModule("""[A-Za-z\$_][A-Za-z0-9\$_]*""")
+    new MatchingStringModule("DAML LF Name", """[A-Za-z\$_][A-Za-z0-9\$_]*""")
 
   /** Package names are non-empty US-ASCII strings built from letters, digits, minus and underscore.
     */
   override type PackageName = String
   override val PackageName: ConcatenableStringModule[PackageName, HexString] =
-    new ConcatenableMatchingStringModule("-_".contains(_))
+    new ConcatenableMatchingStringModule("DAML LF Package Name", "-_".contains(_))
 
   /** Package versions are non-empty strings consisting of segments of digits (without leading zeros)
       separated by dots.
     */
   override type PackageVersion = String
   override val PackageVersion: StringModule[PackageVersion] =
-    new MatchingStringModule("""(0|[1-9][0-9]*)(\.(0|[1-9][0-9]*))*""")
+    new MatchingStringModule("DAML LF Package Version", """(0|[1-9][0-9]*)(\.(0|[1-9][0-9]*))*""")
 
   /** Party identifiers are non-empty US-ASCII strings built from letters, digits, space, colon, minus and,
-    *underscore. We use them to represent [Party] literals. In this way, we avoid
+    * underscore limited to 255 chars. We use them to represent [Party] literals. In this way, we avoid
     * empty identifiers, escaping problems, and other similar pitfalls.
     */
   override type Party = String
   override val Party: ConcatenableStringModule[Party, HexString] =
-    new ConcatenableMatchingStringModule(":-_ ".contains(_))
+    new ConcatenableMatchingStringModule("DAML LF Party", ":-_ ".contains(_), 255)
 
   /** Reference to a package via a package identifier. The identifier is the ascii7
     * lowercase hex-encoded hash of the package contents found in the DAML LF Archive. */
   override type PackageId = String
   override val PackageId: ConcatenableStringModule[PackageId, HexString] =
-    new ConcatenableMatchingStringModule("-_ ".contains(_))
+    new ConcatenableMatchingStringModule("DAML LF Package ID", "-_ ".contains(_))
 
   /**
     * Used to reference to leger objects like contractIds, ledgerIds,
@@ -256,7 +262,7 @@ private[data] final class IdStringImpl extends IdString {
   // We allow space because the navigator's applicationId used it.
   override type LedgerString = String
   override val LedgerString: ConcatenableStringModule[LedgerString, HexString] =
-    new ConcatenableMatchingStringModule("._:-#/ ".contains(_), 255)
+    new ConcatenableMatchingStringModule("DAML LF Ledger String", "._:-#/ ".contains(_), 255)
 
   override type ParticipantId = String
   override val ParticipantId = LedgerString
@@ -264,7 +270,8 @@ private[data] final class IdStringImpl extends IdString {
   /**
     * Legacy contractIds.
     */
-  override type ContractIdString = LedgerString
-  override val ContractIdString: ConcatenableStringModule[LedgerString, HexString] = LedgerString
+  override type ContractIdString = String
+  override val ContractIdString: StringModule[ContractIdString] =
+    new MatchingStringModule("DAML LF Contract ID", """#[\w._:\-#/ ]{0,254}""")
 
 }

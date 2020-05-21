@@ -1,4 +1,4 @@
--- Copyright (c) 2020 The DAML Authors. All rights reserved.
+-- Copyright (c) 2020 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
 -- SPDX-License-Identifier: Apache-2.0
 
 {-# LANGUAGE TemplateHaskell     #-}
@@ -10,7 +10,6 @@
 module DA.Cli.Damlc (main) where
 
 import qualified "zip-archive" Codec.Archive.Zip as ZipArchive
-import qualified "zip" Codec.Archive.Zip as Zip
 import Control.Exception
 import Control.Exception.Safe (catchIO)
 import Control.Monad.Except
@@ -20,13 +19,12 @@ import qualified DA.Cli.Args as ParseArgs
 import DA.Cli.Damlc.Base
 import DA.Cli.Damlc.BuildInfo
 import qualified DA.Cli.Damlc.Command.Damldoc as Damldoc
-import DA.Cli.Damlc.IdeState
 import DA.Cli.Damlc.Packaging
 import DA.Cli.Damlc.Test
 import DA.Daml.Compiler.Dar
 import qualified DA.Daml.Compiler.Repl as Repl
 import DA.Daml.Compiler.DocTest
-import DA.Daml.Compiler.Scenario
+import DA.Daml.LF.ScenarioServiceClient (readScenarioServiceConfig, withScenarioService')
 import qualified DA.Daml.LF.ReplClient as ReplClient
 import DA.Daml.Compiler.Validate (validateDar)
 import qualified DA.Daml.LF.Ast as LF
@@ -34,6 +32,7 @@ import qualified DA.Daml.LF.Proto3.Archive as Archive
 import DA.Daml.LF.Reader
 import DA.Daml.LanguageServer
 import DA.Daml.Options.Types
+import DA.Daml.Package.Config
 import DA.Daml.Project.Config
 import DA.Daml.Project.Consts
 import DA.Daml.Project.Types (ConfigError(..), ProjectPath(..))
@@ -43,7 +42,7 @@ import qualified DA.Service.Logger as Logger
 import qualified DA.Service.Logger.Impl.GCP as Logger.GCP
 import qualified DA.Service.Logger.Impl.IO as Logger.IO
 import DA.Signals
-import qualified Com.Digitalasset.DamlLfDev.DamlLf as PLF
+import qualified Com.Daml.DamlLfDev.DamlLf as PLF
 import qualified Data.Aeson.Encode.Pretty as Aeson.Pretty
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as BSC
@@ -58,6 +57,7 @@ import Data.Maybe
 import qualified Data.Text.Extended as T
 import Development.IDE.Core.API
 import Development.IDE.Core.Debouncer
+import Development.IDE.Core.IdeState.Daml
 import Development.IDE.Core.RuleTypes.Daml (GetParsedModule(..))
 import Development.IDE.Core.Rules
 import Development.IDE.Core.Rules.Daml (getDalf, getDlintIdeas)
@@ -78,6 +78,7 @@ import System.Environment
 import System.Exit
 import System.FilePath
 import System.IO.Extra
+import System.Process (StdStream(..))
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
 import Development.IDE.Core.RuleTypes
 import "ghc-lib-parser" ErrUtils
@@ -219,14 +220,14 @@ cmdInspect =
 
 cmdVisual :: Mod CommandFields Command
 cmdVisual =
-    command "visual" $ info (helper <*> cmd) $ progDesc "Generate visual from dar" <> fullDesc
+    command "visual" $ info (helper <*> cmd) $ progDesc "Generate visual from dar (early access)" <> fullDesc
     where
       cmd = vis <$> inputDarOpt <*> dotFileOpt
       vis a b = Command Visual Nothing $ execVisual a b
 
 cmdVisualWeb :: Mod CommandFields Command
 cmdVisualWeb =
-    command "visual-web" $ info (helper <*> cmd) $ progDesc "Generate D3-Web Visual from dar" <> fullDesc
+    command "visual-web" $ info (helper <*> cmd) $ progDesc "Generate D3-Web Visual from dar (early access)" <> fullDesc
     where
       cmd = vis <$> inputDarOpt <*> htmlOutFile <*> openBrowser
       vis a b browser = Command Visual Nothing $ execVisualHtml a b browser
@@ -262,6 +263,11 @@ cmdRepl numProcessors =
             <*> strOption (long "ledger-port" <> help "Port of the ledger API")
             <*> accessTokenFileFlag
             <*> sslConfig
+            <*> optional
+                    (option auto $
+                        long "max-inbound-message-size" <>
+                        help "Optional max inbound message size in bytes."
+                    )
     accessTokenFileFlag = optional . option str $
         long "access-token-file"
         <> metavar "TOKEN_PATH"
@@ -499,57 +505,8 @@ execLint inputFile opts =
          DlintEnabled _ _ -> opts
          DlintDisabled  -> opts{optDlintUsage=DlintEnabled defaultDir True}
 
--- | Parse the daml.yaml for package specific config fields.
-parseProjectConfig :: ProjectConfig -> Either ConfigError PackageConfigFields
-parseProjectConfig project = do
-    pName <- queryProjectConfigRequired ["name"] project
-    pSrc <- queryProjectConfigRequired ["source"] project
-    pExposedModules <- queryProjectConfig ["exposed-modules"] project
-    pVersion <- Just <$> queryProjectConfigRequired ["version"] project
-    pDependencies <- queryProjectConfigRequired ["dependencies"] project
-    pDataDependencies <- fromMaybe [] <$> queryProjectConfig ["data-dependencies"] project
-    pSdkVersion <- queryProjectConfigRequired ["sdk-version"] project
-    Right PackageConfigFields {..}
-
 defaultProjectPath :: ProjectPath
 defaultProjectPath = ProjectPath "."
-
-overrideSdkVersion :: PackageConfigFields -> IO PackageConfigFields
-overrideSdkVersion pkgConfig = do
-    sdkVersionM <- getSdkVersionMaybe
-    case sdkVersionM of
-        Nothing ->
-            pure pkgConfig
-        Just sdkVersion -> do
-            when (pSdkVersion pkgConfig /= PackageSdkVersion sdkVersion) $
-                hPutStrLn stderr $ unwords
-                    [ "Warning: Using DAML SDK version"
-                    , sdkVersion
-                    , "from"
-                    , sdkVersionEnvVar
-                    , "enviroment variable instead of DAML SDK version"
-                    , unPackageSdkVersion (pSdkVersion pkgConfig)
-                    , "from"
-                    , projectConfigName
-                    , "config file."
-                    ]
-            pure pkgConfig { pSdkVersion = PackageSdkVersion sdkVersion }
-
---- | replace SDK version with one ghc-pkg accepts
----
---- This should let release version unchanged, but convert snapshot versions.
---- See module SdkVersion (in //BUILD) for details.
-replaceSdkVersionWithGhcPkgVersion :: PackageConfigFields -> PackageConfigFields
-replaceSdkVersionWithGhcPkgVersion p@PackageConfigFields{ pSdkVersion = PackageSdkVersion v } =
-    p { pSdkVersion = PackageSdkVersion $ SdkVersion.toGhcPkgVersion v }
-
-withPackageConfig :: ProjectPath -> (PackageConfigFields -> IO a) -> IO a
-withPackageConfig projectPath f = do
-    project <- readProjectConfig projectPath
-    pkgConfig <- either throwIO pure (parseProjectConfig project)
-    pkgConfig' <- overrideSdkVersion pkgConfig
-    let pkgConfig'' = replaceSdkVersionWithGhcPkgVersion pkgConfig'
-    f pkgConfig''
 
 -- | If we're in a daml project, read the daml.yaml field and create the project local package
 -- database. Otherwise do nothing.
@@ -573,12 +530,6 @@ initPackageDb opts (InitPkgDb shouldInit) =
             projRoot <- getCurrentDirectory
             withPackageConfig defaultProjectPath $ \PackageConfigFields {..} ->
                 createProjectPackageDb (toNormalizedFilePath' projRoot) opts pSdkVersion pDependencies pDataDependencies
-
-createDarFile :: FilePath -> Zip.ZipArchive () -> IO ()
-createDarFile fp dar = do
-    createDirectoryIfMissing True $ takeDirectory fp
-    Zip.createArchive fp dar
-    putStrLn $ "Created " <> fp
 
 execBuild :: ProjectOpts -> Options -> Maybe FilePath -> IncrementalBuild -> InitPkgDb -> Command
 execBuild projectOpts opts mbOutFile incrementalBuild initPkgDb =
@@ -615,8 +566,9 @@ execRepl
     -> String -> String
     -> Maybe FilePath
     -> Maybe ReplClient.ClientSSLConfig
+    -> Maybe ReplClient.MaxInboundMessageSize
     -> Command
-execRepl projectOpts opts scriptDar mainDar ledgerHost ledgerPort mbAuthToken mbSslConf = Command Repl (Just projectOpts) effect
+execRepl projectOpts opts scriptDar mainDar ledgerHost ledgerPort mbAuthToken mbSslConf mbMaxInboundMessageSize = Command Repl (Just projectOpts) effect
   where effect = do
             -- We change directory so make this absolute
             mainDar <- makeAbsolute mainDar
@@ -627,7 +579,7 @@ execRepl projectOpts opts scriptDar mainDar ledgerHost ledgerPort mbAuthToken mb
             logger <- getLogger opts "repl"
             runfilesDir <- locateRunfiles (mainWorkspace </> "compiler/repl-service/server")
             let jar = runfilesDir </> "repl-service.jar"
-            ReplClient.withReplClient (ReplClient.Options jar ledgerHost ledgerPort mbAuthToken mbSslConf) $ \replHandle ->
+            ReplClient.withReplClient (ReplClient.Options jar ledgerHost ledgerPort mbAuthToken mbSslConf mbMaxInboundMessageSize Inherit) $ \replHandle _stdout _ph ->
                 withTempDir $ \dir ->
                 withCurrentDirectory dir $ do
                 sdkVer <- fromMaybe SdkVersion.sdkVersion <$> lookupEnv sdkVersionEnvVar

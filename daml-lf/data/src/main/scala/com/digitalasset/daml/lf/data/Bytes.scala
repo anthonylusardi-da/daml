@@ -1,10 +1,11 @@
-// Copyright (c) 2020 The DAML Authors. All rights reserved.
+// Copyright (c) 2020 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-package com.digitalasset.daml.lf.data
+package com.daml.lf.data
 
 import java.io.InputStream
 import java.nio.ByteBuffer
+import scalaz.Order
 
 import com.google.protobuf.ByteString
 
@@ -20,7 +21,15 @@ final class Bytes private (protected val value: ByteString) extends AnyVal {
 
   def length: Int = value.size()
 
+  def isEmpty: Boolean = value.isEmpty
+
+  def nonEmpty: Boolean = !value.isEmpty
+
   def toHexString: Ref.HexString = Ref.HexString.encode(this)
+
+  def startsWith(prefix: Bytes): Boolean = value.startsWith(prefix.value)
+
+  def slice(begin: Int, end: Int): Bytes = new Bytes(value.substring(begin, end))
 
   override def toString: String = s"Bytes($toHexString)"
 
@@ -29,11 +38,15 @@ final class Bytes private (protected val value: ByteString) extends AnyVal {
 
 object Bytes {
 
-  implicit val `Bytes Ordering`: Ordering[Bytes] = {
+  val Empty = new Bytes(ByteString.EMPTY)
+
+  implicit val ordering: Ordering[Bytes] = {
     val comparator = ByteString.unsignedLexicographicalComparator()
     (x, y) =>
       comparator.compare(x.value, y.value)
   }
+
+  implicit val order: Order[Bytes] = Order.fromScalaOrdering
 
   def fromByteString(value: ByteString): Bytes =
     new Bytes(value)

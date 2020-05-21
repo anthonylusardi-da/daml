@@ -1,4 +1,4 @@
--- Copyright (c) 2020 The DAML Authors. All rights reserved.
+-- Copyright (c) 2020 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
 -- SPDX-License-Identifier: Apache-2.0
 
 {-# LANGUAGE DuplicateRecordFields #-}
@@ -340,8 +340,7 @@ tGetLedgerConfiguration withSandbox = testCase "tGetLedgerConfiguration" $ run w
     xs <- getLedgerConfiguration lid
     Just (Right config) <- liftIO $ timeout 1 (takeStream xs)
     let expected = LedgerConfiguration {
-            minTtl = Duration {durationSeconds = 2, durationNanos = 0},
-            maxTtl = Duration {durationSeconds = 30, durationNanos = 0}}
+            maxDeduplicationTime = Duration {durationSeconds = 86400, durationNanos = 0}}
     liftIO $ assertEqual "config" expected config
 
 tUploadDarFileBad :: SandboxTest
@@ -523,7 +522,7 @@ bucket = VRecord $ Record Nothing
         [ VVariant $ Variant Nothing (ConstructorId "B") (VBool True)
         , VVariant $ Variant Nothing (ConstructorId "I") (VInt 99)
         ]
-    , RecordField "contract"$ VContract (ContractId "xxxxx")
+    , RecordField "contract"$ VContract (ContractId "#xxxxx")
     , RecordField "list"    $ VList []
     , RecordField "int"     $ VInt 42
     , RecordField "decimal" $ VDecimal 123.456

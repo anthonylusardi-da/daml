@@ -70,7 +70,7 @@ da_scala_library(
         ) + [
             "//:MVN_VERSION",
         ],
-    tags = ["maven_coordinates=com.digitalasset.platform:sandbox:__VERSION__"],
+    tags = ["maven_coordinates=com.daml:sandbox:__VERSION__"],
     visibility = [
         "//visibility:public",
     ],
@@ -378,7 +378,7 @@ detailed information.
     ```
     bazel test //ledger/sandbox:sandbox-scala-tests_test_suite_src_test_suite_scala_com_digitalasset_platform_sandbox_stores_ledger_sql_JdbcLedgerDaoSpec.scala
     ```
-    
+
 - Execute a test with a specific name
 
     ```
@@ -395,7 +395,7 @@ detailed information.
       --test_arg=-z \
       --test_arg="should return true"
     ```
-    
+
     More broadly, for Scala tests you can pass through any of the args outlined in http://www.scalatest.org/user_guide/using_the_runner, separating into two instances of the --test-arg parameter as shown in the two examples above.
 
 ### Running Executables
@@ -716,45 +716,6 @@ external dependencies, then [this
 document](https://github.com/digital-asset/daml/blob/master/BAZEL-haskell.md)
 is for you!
 
-## Documentation packages in Bazel
-
-'daml-foundations' documentation resides in the DA git repository in
-sub-directories of the path `//daml-foundations/daml-tools/docs`. Each
-sub-directory there is a documentation "package". A documentation
-package contains a `BUILD.bazel` file.
-
-The rule for producing a documentation package under Bazel is
-`da_doc_package` and it is brought into the scope of a `BUILD.bazel`
-file with the following directive.
-```
-load ("//bazel_tools:docs.bzl", "da_doc_package")
-```
-
-### Synopsis
-
-`da_doc_package (name, prepare, extra_sources)`
-
-Build a documentation package.
-
-Attributes:
-  - `name`
-    Required. A unique name for the package.
-  - `prepare`
-    Optional. If provided then it is interpreted as a bash script to be
-    executed on the documentation sources before the bundle generation
-    step (see below for what that means).
-  - `extra_sources`
-    Optional. Default value is the empty list.
-
-The output of `da_doc_package` with name `"foo"` is a bundle
-`sources.tar.gzip` in the path
-`//bazel-bin/daml-foundations/daml-tools/docs/foo`. The bundle for `"foo"` would be produced with the command:
-```
-bazel build //daml-foundations/daml-tools/docs/foo:foo
-```
-The contents of the bundle will be copies of files under the directory
-`//daml-foundations/daml-tools/doc/foo/sources`.
-
 ## Scala in Bazel
 
 In this section we will provide an overview of how Scala targets are defined in
@@ -846,12 +807,6 @@ da_scala_library(
 )
 ```
 
-### Scala Macro Libraries
-
-If a Scala library defines macros that should be used by other Scala targets
-later on, then it has to be defined using `da_scala_macro_library`. Macros may
-not be defined and used within the same target.
-
 ### Scala Executables
 
 Scala executables are defined using `da_scala_binary`. It takes most of the
@@ -865,7 +820,7 @@ are:
 - `data`:
     Files that are needed at runtime. In order to access such files at runtime
     you should use the utility library in
-    `com.digitalasset.testing.BuildSystemSupport`.
+    `com.daml.testing.BuildSystemSupport`.
 
 ### Scala Test Cases
 
@@ -918,13 +873,13 @@ daml(
   # The directory prefix under which to create the DAR tree.
   target_dir = "target/scala-2.12/resource_managed/it/dars",
   # The group ID.
-  group = "com.digitalasset.sample",
+  group = "com.daml.sample",
   # The artifact ID.
   artifact = "test-all",
   # The package version.
   version = "0.1",
   # The package name.
-  package = "com.digitalasset.sample",
+  package = "com.daml.sample",
 )
 ```
 
@@ -1036,6 +991,20 @@ Unfortunately, [GHC builds are not deterministic](https://gitlab.haskell.org/ghc
     rm -r .bazel-cache    # clean the local cache
 
 This will also mean that changes made locally will need to be rebuilt, but it's likely that this will still result in a net positive gain on your build time.
+
+If you are still rebuilding after this, you probably also have a
+poisoned Nix cache. To clear that run through the following steps:
+
+    bazel clean --expunge # clean the build cache
+    rm -r .bazel-cache    # clean the local cache
+    rm dev-env/var/gc-roots/* # Remove dev-env GC roots
+    rm result* # Remove GC roots you might have from previous nix-build invocations.
+    nix-store --gc --print-roots # View all garbage collection roots
+    # Verify that there is nothing from our repo or some Bazel cache.
+    # If you are not sure ask in #team-daml
+    nix-store --gc # Run garbage collection
+    nix-build nix -A tools -A cached --no-out-link # Build the nix derivations (they should be fetched from the cache)
+    bazel build //... # You should now see things being fetched from the cache
 
 ### Working in environments with low or intermittent connectivity
 

@@ -1,7 +1,7 @@
-// Copyright (c) 2020 The DAML Authors. All rights reserved.
+// Copyright (c) 2020 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-package com.digitalasset.platform.sandbox.stores
+package com.daml.platform.sandbox.stores
 
 import java.time.Instant
 import java.util.concurrent.CompletionStage
@@ -9,7 +9,9 @@ import java.util.concurrent.CompletionStage
 import akka.NotUsed
 import akka.stream.Materializer
 import akka.stream.scaladsl.{Sink, Source}
-import com.codahale.metrics.MetricRegistry
+import com.daml.api.util.TimeProvider
+import com.daml.daml_lf_dev.DamlLf.Archive
+import com.daml.ledger.api.health.HealthStatus
 import com.daml.ledger.participant.state.index.v2._
 import com.daml.ledger.participant.state.v1.{
   ApplicationId => _,
@@ -18,22 +20,21 @@ import com.daml.ledger.participant.state.v1.{
   _
 }
 import com.daml.ledger.participant.state.{v1 => ParticipantState}
-import com.digitalasset.api.util.TimeProvider
-import com.digitalasset.daml.lf.data.Ref.Party
-import com.digitalasset.daml.lf.data.{ImmArray, Time}
-import com.digitalasset.daml_lf_dev.DamlLf.Archive
-import com.digitalasset.ledger.api.health.HealthStatus
-import com.digitalasset.logging.LoggingContext
-import com.digitalasset.platform.common.LedgerIdMode
-import com.digitalasset.platform.configuration.ServerRole
-import com.digitalasset.platform.index.LedgerBackedIndexService
-import com.digitalasset.platform.packages.InMemoryPackageStore
-import com.digitalasset.platform.sandbox.LedgerIdGenerator
-import com.digitalasset.platform.sandbox.stores.ledger.ScenarioLoader.LedgerEntryOrBump
-import com.digitalasset.platform.sandbox.stores.ledger._
-import com.digitalasset.platform.sandbox.stores.ledger.inmemory.InMemoryLedger
-import com.digitalasset.platform.sandbox.stores.ledger.sql.{SqlLedger, SqlStartMode}
-import com.digitalasset.resources.{Resource, ResourceOwner}
+import com.daml.lf.data.Ref.Party
+import com.daml.lf.data.{ImmArray, Time}
+import com.daml.lf.transaction.TransactionCommitter
+import com.daml.logging.LoggingContext
+import com.daml.metrics.Metrics
+import com.daml.platform.common.LedgerIdMode
+import com.daml.platform.configuration.ServerRole
+import com.daml.platform.index.LedgerBackedIndexService
+import com.daml.platform.packages.InMemoryPackageStore
+import com.daml.platform.sandbox.LedgerIdGenerator
+import com.daml.platform.sandbox.stores.ledger.ScenarioLoader.LedgerEntryOrBump
+import com.daml.platform.sandbox.stores.ledger._
+import com.daml.platform.sandbox.stores.ledger.inmemory.InMemoryLedger
+import com.daml.platform.sandbox.stores.ledger.sql.{SqlLedger, SqlStartMode}
+import com.daml.resources.{Resource, ResourceOwner}
 import org.slf4j.LoggerFactory
 
 import scala.compat.java8.FutureConverters
@@ -44,8 +45,6 @@ trait IndexAndWriteService {
   def indexService: IndexService
 
   def writeService: WriteService
-
-  def publishHeartbeat(instant: Instant): Future[Unit]
 }
 
 object SandboxIndexAndWriteService {
@@ -62,26 +61,29 @@ object SandboxIndexAndWriteService {
       ledgerEntries: ImmArray[LedgerEntryOrBump],
       startMode: SqlStartMode,
       queueDepth: Int,
+      transactionCommitter: TransactionCommitter,
       templateStore: InMemoryPackageStore,
-      metrics: MetricRegistry,
+      eventsPageSize: Int,
+      metrics: Metrics,
   )(implicit mat: Materializer, logCtx: LoggingContext): ResourceOwner[IndexAndWriteService] =
     SqlLedger
       .owner(
-        ServerRole.Sandbox,
-        jdbcUrl,
-        ledgerId,
-        participantId,
-        timeProvider,
-        acs,
-        templateStore,
-        ledgerEntries,
-        initialConfig,
-        queueDepth,
-        startMode,
-        metrics,
+        serverRole = ServerRole.Sandbox,
+        jdbcUrl = jdbcUrl,
+        ledgerId = ledgerId,
+        participantId = participantId,
+        timeProvider = timeProvider,
+        acs = acs,
+        packages = templateStore,
+        initialLedgerEntries = ledgerEntries,
+        queueDepth = queueDepth,
+        transactionCommitter = transactionCommitter,
+        startMode = startMode,
+        eventsPageSize = eventsPageSize,
+        metrics = metrics,
       )
       .flatMap(ledger =>
-        owner(MeteredLedger(ledger, metrics), participantId, initialConfig.timeModel, timeProvider))
+        owner(MeteredLedger(ledger, metrics), participantId, initialConfig, timeProvider))
 
   def inMemory(
       ledgerId: LedgerIdMode,
@@ -90,8 +92,9 @@ object SandboxIndexAndWriteService {
       timeProvider: TimeProvider,
       acs: InMemoryActiveLedgerState,
       ledgerEntries: ImmArray[LedgerEntryOrBump],
+      transactionCommitter: TransactionCommitter,
       templateStore: InMemoryPackageStore,
-      metrics: MetricRegistry,
+      metrics: Metrics,
   )(implicit mat: Materializer): ResourceOwner[IndexAndWriteService] = {
     val ledger =
       new InMemoryLedger(
@@ -99,29 +102,28 @@ object SandboxIndexAndWriteService {
         participantId,
         timeProvider,
         acs,
+        transactionCommitter,
         templateStore,
         ledgerEntries,
-        intialConfig,
       )
-    owner(MeteredLedger(ledger, metrics), participantId, intialConfig.timeModel, timeProvider)
+    owner(MeteredLedger(ledger, metrics), participantId, intialConfig, timeProvider)
   }
 
   private def owner(
       ledger: Ledger,
       participantId: ParticipantId,
-      timeModel: ParticipantState.TimeModel,
+      initialConfig: Configuration,
       timeProvider: TimeProvider,
   )(implicit mat: Materializer): ResourceOwner[IndexAndWriteService] = {
     val indexSvc = new LedgerBackedIndexService(ledger, participantId) {
       override def getLedgerConfiguration(): Source[LedgerConfiguration, NotUsed] =
         Source
-          .single(LedgerConfiguration(timeModel.minTtl, timeModel.maxTtl))
+          .single(LedgerConfiguration(initialConfig.maxDeduplicationTime))
           .concat(Source.future(Promise[LedgerConfiguration]().future)) // we should keep the stream open!
     }
     val writeSvc = new LedgerBackedWriteService(ledger, timeProvider)
 
     for {
-      _ <- new HeartbeatScheduler(timeProvider, 1.seconds, "heartbeats", ledger.publishHeartbeat)
       _ <- new HeartbeatScheduler(
         TimeProvider.UTC,
         10.minutes,
@@ -132,9 +134,6 @@ object SandboxIndexAndWriteService {
         override val indexService: IndexService = indexSvc
 
         override val writeService: WriteService = writeSvc
-
-        override def publishHeartbeat(instant: Instant): Future[Unit] =
-          ledger.publishHeartbeat(instant)
       }
   }
 

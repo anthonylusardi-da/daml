@@ -1,5 +1,5 @@
 #!/bin/bash
-# Copyright (c) 2020 The DAML Authors. All rights reserved.
+# Copyright (c) 2020 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
 set -eou pipefail
@@ -44,6 +44,7 @@ PACKAGE_JSON=$(rlocation "$TEST_WORKSPACE/$7")
 TS_DIR=$(dirname $PACKAGE_JSON)
 DAML_TYPES=$(rlocation "$TEST_WORKSPACE/$8")
 DAML_LEDGER=$(rlocation "$TEST_WORKSPACE/$9")
+SDK_VERSION=${10}
 
 TMP_DAML_TYPES=$TMP_DIR/daml-types
 TMP_DAML_LEDGER=$TMP_DIR/daml-ledger
@@ -57,16 +58,13 @@ cp -rL $DAML_LEDGER/* $TMP_DAML_LEDGER
 
 cd $TMP_DIR
 
-# Call daml2ts.
-PATH=`dirname $YARN`:$PATH $DAML2TS -o daml2ts $DAR
+# Call daml2js.
+PATH=`dirname $YARN`:$PATH $DAML2TS -o daml2js $DAR
 
-# The previous step provides all the daml2ts Javascript needed by the
-# build-and-lint-test workspace.
-$YARN install --pure-lockfile > /dev/null 2>&1
-$YARN workspaces run build  # Build it.
-$YARN workspaces run lint   # No great value in this but nonetheless, lint it.
-# Invoke 'yarn test' in the 'build-and-lint-test' package
-# directory. Control is thereby passed to
-# 'language-support/ts/codegen/tests/ts/build-and-lint-test/src/__tests__/test.ts'.
+# Build, lint, test.
 cd build-and-lint-test
+$YARN install --pure-lockfile > /dev/null
+$YARN run build && $YARN run lint
+# Invoke 'yarn test'. Control is thereby passed to
+# 'language-support/ts/codegen/tests/ts/build-and-lint-test/src/__tests__/test.ts'.
 JAVA=$JAVA SANDBOX=$SANDBOX JSON_API=$JSON_API DAR=$DAR $YARN test

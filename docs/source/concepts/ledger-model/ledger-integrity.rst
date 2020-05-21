@@ -1,4 +1,4 @@
-.. Copyright (c) 2020 The DAML Authors. All rights reserved.
+.. Copyright (c) 2020 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
 .. SPDX-License-Identifier: Apache-2.0
 
 .. _da-model-integrity:
@@ -76,7 +76,7 @@ Definition »contract consistency«
 
   #. either `act` is itself **Create c** or a **Create c** happens before `act`
   #. `act` does not happen before any **Create c** action
-  #. `act` does not happen after any exercise consuming `c`.
+  #. `act` does not happen after any **Exercise** action consuming `c`.
 
 
 The consistency condition rules out the double spend example.

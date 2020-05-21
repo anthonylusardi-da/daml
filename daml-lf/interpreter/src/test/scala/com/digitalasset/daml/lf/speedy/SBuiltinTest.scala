@@ -1,18 +1,18 @@
-// Copyright (c) 2020 The DAML Authors. All rights reserved.
+// Copyright (c) 2020 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-package com.digitalasset.daml.lf.speedy
+package com.daml.lf
+package speedy
 
 import java.util
 
-import com.digitalasset.daml.lf.PureCompiledPackages
-import com.digitalasset.daml.lf.data._
-import com.digitalasset.daml.lf.language.Ast
-import com.digitalasset.daml.lf.language.Ast._
-import com.digitalasset.daml.lf.speedy.SError.{DamlEArithmeticError, SError, SErrorCrash}
-import com.digitalasset.daml.lf.speedy.SResult.{SResultContinue, SResultError}
-import com.digitalasset.daml.lf.speedy.SValue._
-import com.digitalasset.daml.lf.testing.parser.Implicits._
+import com.daml.lf.data._
+import com.daml.lf.language.Ast
+import com.daml.lf.language.Ast._
+import com.daml.lf.speedy.SError.{DamlEArithmeticError, SError, SErrorCrash}
+import com.daml.lf.speedy.SResult.{SResultFinalValue, SResultError}
+import com.daml.lf.speedy.SValue._
+import com.daml.lf.testing.parser.Implicits._
 import org.scalactic.Equality
 import org.scalatest.prop.TableDrivenPropertyChecks
 import org.scalatest.{FreeSpec, Matchers}
@@ -795,7 +795,7 @@ class SBuiltinTest extends FreeSpec with Matchers with TableDrivenPropertyChecks
   "TextMap operations" - {
 
     def buildMap[X](typ: String, l: (String, X)*) =
-      ("TEXTMAP_EMPTY @Int64" /: l) {
+      (l foldLeft "TEXTMAP_EMPTY @Int64") {
         case (acc, (k, v)) => s"""(TEXTMAP_INSERT @$typ "$k" $v $acc)"""
       }
 
@@ -909,7 +909,7 @@ class SBuiltinTest extends FreeSpec with Matchers with TableDrivenPropertyChecks
   "GenMap operations" - {
 
     def buildMap[X](typ: String, l: (String, X)*) =
-      ("GENMAP_EMPTY @Text @Int64" /: l) {
+      (l foldLeft "GENMAP_EMPTY @Text @Int64") {
         case (acc, (k, v)) => s"""(GENMAP_INSERT @Text @$typ "$k" $v $acc)"""
       }
 
@@ -1208,11 +1208,32 @@ class SBuiltinTest extends FreeSpec with Matchers with TableDrivenPropertyChecks
         eval(e"TO_TEXT_PARTY 'alice'") shouldEqual Right(SText("alice"))
       }
 
-      "FROM_TEXT_PARTY" in {
-        eval(e"""FROM_TEXT_PARTY "alice" """) shouldEqual Right(
-          SOptional(Some(SParty(Ref.Party.assertFromString("alice")))),
-        )
-        eval(e"""FROM_TEXT_PARTY "bad%char" """) shouldEqual Right(SOptional(None))
+      "FROM_TEXT_PARTY" - {
+        "should convert correct string" in {
+          eval(e"""FROM_TEXT_PARTY "alice" """) shouldEqual Right(
+            SOptional(Some(SParty(Ref.Party.assertFromString("alice")))),
+          )
+        }
+        "should not convert string with incorrect char" in {
+          eval(e"""FROM_TEXT_PARTY "bad%char" """) shouldEqual Right(SOptional(None))
+        }
+
+        "should not convert too long string" in {
+          val party255 = "p" * 255
+          val party256 = party255 + "p"
+          eval(e"""FROM_TEXT_PARTY "$party255" """) shouldEqual Right(
+            SOptional(Some(SParty(Ref.Party.assertFromString(party255)))),
+          )
+          eval(e"""FROM_TEXT_PARTY "$party256" """) shouldEqual Right(SOptional(None))
+        }
+
+        "should not convert empty string" in {
+          eval(e"""FROM_TEXT_PARTY "p" """) shouldEqual Right(
+            SOptional(Some(SParty(Ref.Party.assertFromString("p")))),
+          )
+          eval(e"""FROM_TEXT_PARTY "" """) shouldEqual Right(SOptional(None))
+        }
+
       }
 
       "FROM_TEXT_INT64" in {
@@ -1429,19 +1450,20 @@ object SBuiltinTest {
   private def eval(e: Expr): Either[SError, SValue] = {
     val machine = Speedy.Machine.fromExpr(
       expr = e,
-      checkSubmitterInMaintainers = true,
       compiledPackages = compiledPackages,
       scenario = false,
+      submissionTime = Time.Timestamp.now(),
+      initialSeeding = InitialSeeding.NoSeed,
     )
     final case class Goodbye(e: SError) extends RuntimeException("", null, false, false)
     try {
-      while (!machine.isFinal) machine.step() match {
-        case SResultContinue => ()
+      val value = machine.run() match {
+        case SResultFinalValue(v) => v
         case SResultError(err) => throw Goodbye(err)
         case res => throw new RuntimeException(s"Got unexpected interpretation result $res")
       }
 
-      Right(machine.toSValue)
+      Right(value)
     } catch { case Goodbye(err) => Left(err) }
   }
 

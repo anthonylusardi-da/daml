@@ -1,13 +1,13 @@
-// Copyright (c) 2020 The DAML Authors. All rights reserved.
+// Copyright (c) 2020 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
 package com.daml.ledger.api.testtool.tests
 
 import com.daml.ledger.api.testtool.infrastructure.Allocation._
 import com.daml.ledger.api.testtool.infrastructure.{LedgerSession, LedgerTestSuite}
-import com.digitalasset.daml.lf.data.Ref
-import com.digitalasset.ledger.api.v1.admin.party_management_service.PartyDetails
-import com.digitalasset.ledger.client.binding
+import com.daml.lf.data.Ref
+import com.daml.ledger.api.v1.admin.party_management_service.PartyDetails
+import com.daml.ledger.client.binding
 import scalaz.Tag
 
 import scala.util.Random

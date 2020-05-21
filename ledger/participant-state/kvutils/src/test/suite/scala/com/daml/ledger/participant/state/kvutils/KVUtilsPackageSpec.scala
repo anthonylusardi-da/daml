@@ -1,17 +1,17 @@
-// Copyright (c) 2020 The DAML Authors. All rights reserved.
+// Copyright (c) 2020 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
 package com.daml.ledger.participant.state.kvutils
 
 import java.io.File
 
+import com.daml.bazeltools.BazelRunfiles
+import com.daml.daml_lf_dev.DamlLf
 import com.daml.ledger.participant.state.kvutils.DamlKvutils.{
   DamlLogEntry,
   DamlPackageUploadRejectionEntry
 }
-import com.digitalasset.daml.bazeltools.BazelRunfiles
-import com.digitalasset.daml.lf.archive.DarReader
-import com.digitalasset.daml_lf_dev.DamlLf
+import com.daml.lf.archive.DarReader
 import org.scalatest.{Matchers, WordSpec}
 
 import scala.util.Try
@@ -92,11 +92,9 @@ class KVUtilsPackageSpec extends WordSpec with Matchers with BazelRunfiles {
         _ <- submitArchives("simple-archive-submission-1", simpleArchive).map(_._2)
       } yield {
         // Check that we're updating the metrics (assuming this test at least has been run)
-        metricRegistry.counter("kvutils.committer.package_upload.accepts").getCount should be >= 1L
-        metricRegistry
-          .counter("kvutils.committer.package_upload.rejections")
-          .getCount should be >= 1L
-        metricRegistry.timer("kvutils.committer.package_upload.run_timer").getCount should be >= 1L
+        metrics.daml.kvutils.committer.packageUpload.accepts.getCount should be >= 1L
+        metrics.daml.kvutils.committer.packageUpload.rejections.getCount should be >= 1L
+        metrics.daml.kvutils.committer.runTimer("package_upload").getCount should be >= 1L
       }
     }
 

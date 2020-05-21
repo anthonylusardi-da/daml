@@ -1,4 +1,4 @@
-.. Copyright (c) 2020 The DAML Authors. All rights reserved.
+.. Copyright (c) 2020 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
 .. SPDX-License-Identifier: Apache-2.0
 
 Overview: template structure
@@ -29,6 +29,11 @@ template body
     ``where`` keyword
 
     Can include:
+
+    :ref:`template-local definitions <daml-ref-template-let>`
+        ``let`` keyword
+
+        Lets you make definitions that have access to the contract arguments and are available in the rest of the template definition.
 
     :ref:`signatories <daml-ref-signatories>`
         ``signatory`` keyword

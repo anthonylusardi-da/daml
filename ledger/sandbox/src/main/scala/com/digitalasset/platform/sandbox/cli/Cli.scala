@@ -1,28 +1,26 @@
-// Copyright (c) 2020 The DAML Authors. All rights reserved.
+// Copyright (c) 2020 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-package com.digitalasset.platform.sandbox.cli
+package com.daml.platform.sandbox.cli
 
 import java.io.File
-import java.net.InetSocketAddress
-import java.nio.file.Paths
 import java.time.Duration
 
 import ch.qos.logback.classic.Level
 import com.auth0.jwt.algorithms.Algorithm
 import com.daml.ledger.participant.state.v1.SeedService.Seeding
-import com.digitalasset.buildinfo.BuildInfo
-import com.digitalasset.daml.lf.data.Ref
-import com.digitalasset.jwt.{ECDSAVerifier, HMAC256Verifier, JwksVerifier, RSA256Verifier}
-import com.digitalasset.ledger.api.auth.AuthServiceJWT
-import com.digitalasset.ledger.api.domain.LedgerId
-import com.digitalasset.ledger.api.tls.TlsConfiguration
-import com.digitalasset.platform.common.LedgerIdMode
-import com.digitalasset.platform.sandbox.config.{InvalidConfigException, SandboxConfig}
-import com.digitalasset.platform.sandbox.metrics.MetricsReporter
-import com.digitalasset.platform.services.time.TimeProviderType
-import com.digitalasset.ports.Port
-import com.google.common.net.HostAndPort
+import com.daml.buildinfo.BuildInfo
+import com.daml.lf.data.Ref
+import com.daml.jwt.{ECDSAVerifier, HMAC256Verifier, JwksVerifier, RSA256Verifier}
+import com.daml.ledger.api.auth.AuthServiceJWT
+import com.daml.ledger.api.domain.LedgerId
+import com.daml.ledger.api.tls.TlsConfiguration
+import com.daml.platform.common.LedgerIdMode
+import com.daml.platform.configuration.MetricsReporter
+import com.daml.platform.configuration.Readers._
+import com.daml.platform.sandbox.config.{InvalidConfigException, SandboxConfig}
+import com.daml.platform.services.time.TimeProviderType
+import com.daml.ports.Port
 import io.netty.handler.ssl.ClientAuth
 import scopt.{OptionParser, Read}
 
@@ -34,41 +32,12 @@ import scala.util.Try
 // see we either use nulls or use the mutable builder instead.
 object Cli {
 
-  private implicit val durationRead: Read[Duration] = new Read[Duration] {
-    override def arity: Int = 1
-
-    override val reads: String => Duration = Duration.parse
-  }
-
   private implicit val clientAuthRead: Read[ClientAuth] = Read.reads {
     case "none" => ClientAuth.NONE
     case "optional" => ClientAuth.OPTIONAL
     case "require" => ClientAuth.REQUIRE
     case _ =>
       throw new InvalidConfigException(s"""Must be one of "none", "optional", or "require".""")
-  }
-
-  private implicit val metricsReporterRead: Read[MetricsReporter] = Read.reads {
-    _.split(":", 2).toSeq match {
-      case Seq("console") => MetricsReporter.Console
-      case Seq("csv", directory) => MetricsReporter.Csv(Paths.get(directory))
-      case Seq("graphite") =>
-        MetricsReporter.Graphite()
-      case Seq("graphite", address) =>
-        Try(address.toInt)
-          .map(port => MetricsReporter.Graphite(port))
-          .recover {
-            case _: NumberFormatException =>
-              val hostAndPort = HostAndPort
-                .fromString(address)
-                .withDefaultPort(MetricsReporter.Graphite.defaultPort)
-              MetricsReporter.Graphite(
-                new InetSocketAddress(hostAndPort.getHost, hostAndPort.getPort))
-          }
-          .get
-      case _ =>
-        throw new InvalidConfigException(s"""Must be one of "console", or "csv:PATH".""")
-    }
   }
 
   private val KnownLogLevels = Set("ERROR", "WARN", "INFO", "DEBUG", "TRACE")
@@ -130,6 +99,11 @@ object Cli {
             "Note that when using --postgres-backend the scenario will be ran only if starting from a fresh database, _not_ when resuming from an existing one. " +
             "Two identifier formats are supported: Module.Name:Entity.Name (preferred) and Module.Name.Entity.Name (deprecated, will print a warning when used)." +
             "Also note that instructing the sandbox to load a scenario will have the side effect of loading _all_ the .dar files provided eagerly (see --eager-package-loading).")
+
+      opt[Boolean](name = "implicit-party-allocation")
+        .action((x, c) => c.copy(implicitPartyAllocation = x))
+        .text("When referring to a party that doesn't yet exist on the ledger, Sandbox will implicitly allocate that party."
+          + " You can optionally disable this behavior to bring Sandbox into line with other ledgers.")
 
       opt[String]("pem")
         .optional()
@@ -199,13 +173,6 @@ object Cli {
         .text("Whether to load all the packages in the .dar files provided eagerly, rather than when needed as the commands come.")
         .action((_, config) => config.copy(eagerPackageLoading = true))
 
-      opt[Long]("max-ttl-seconds")
-        .optional()
-        .validate(v => Either.cond(v > 0, (), "Max TTL must be a positive number"))
-        .text("The maximum TTL allowed for commands in seconds")
-        .action((maxTtl, config) =>
-          config.copy(timeModel = config.timeModel.copy(maxTtl = Duration.ofSeconds(maxTtl))))
-
       opt[String]("auth-jwt-hs256-unsafe")
         .optional()
         .hidden()
@@ -257,6 +224,12 @@ object Cli {
         .text("Enables JWT-based authorization, where the JWT is signed by RSA256 with a public key loaded from the given JWKS URL")
         .action((url, config) => config.copy(authService = Some(AuthServiceJWT(JwksVerifier(url)))))
 
+      opt[Int]("events-page-size")
+        .optional()
+        .text(
+          s"Number of events fetched from the index for every round trip when serving streaming calls. Default is ${SandboxConfig.DefaultEventsPageSize}.")
+        .action((eventsPageSize, config) => config.copy(eventsPageSize = eventsPageSize))
+
       private val seedingMap = Map[String, Option[Seeding]](
         "no" -> None,
         "testing-static" -> Some(Seeding.Static),
@@ -284,6 +257,19 @@ object Cli {
         .optional()
         .action((interval, config) => config.copy(metricsReportingInterval = interval))
         .hidden()
+
+      opt[Int]("max-commands-in-flight")
+        .optional()
+        .action((value, config) =>
+          config.copy(commandConfig = config.commandConfig.copy(maxCommandsInFlight = value)))
+        .text("The maximum number of unconfirmed commands in flight in CommandService.")
+
+      opt[Int]("max-parallel-submissions")
+        .optional()
+        .action((value, config) =>
+          config.copy(commandConfig = config.commandConfig.copy(maxParallelSubmissions = value)))
+        .text(
+          "The maximum number of parallel command submissions. Only applicable to sandbox-classic.")
 
       help("help").text("Print the usage text")
 

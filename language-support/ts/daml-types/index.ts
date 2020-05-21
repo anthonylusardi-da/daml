@@ -1,4 +1,4 @@
-// Copyright (c) 2020 The DAML Authors. All rights reserved.
+// Copyright (c) 2020 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 import * as jtv from '@mojotech/json-type-validation';
 
@@ -68,7 +68,7 @@ const registeredTemplates: {[key: string]: Template<object>} = {};
 /**
  * @internal
  */
-export const registerTemplate = <T extends object>(template: Template<T>) => {
+export const registerTemplate = <T extends object>(template: Template<T>): void => {
   const templateId = template.templateId;
   const oldTemplate = registeredTemplates[templateId];
   if (oldTemplate === undefined) {
@@ -211,7 +211,7 @@ export type List<T> = T[];
  * Companion object of the [[List]] type.
  */
 export const List = <T>(t: Serializable<T>): Serializable<T[]> => ({
-  decoder: () => jtv.array(t.decoder()),
+  decoder: (): jtv.Decoder<T[]> => jtv.array(t.decoder()),
 });
 
 /**
@@ -323,7 +323,7 @@ export type TextMap<T> = { [key: string]: T };
  * Companion object of the [[TextMap]] type.
  */
 export const TextMap = <T>(t: Serializable<T>): Serializable<TextMap<T>> => ({
-  decoder: () => jtv.dict(t.decoder()),
+  decoder: (): jtv.Decoder<TextMap<T>> => jtv.dict(t.decoder()),
 });
 
 // TODO(MH): `Map` type.

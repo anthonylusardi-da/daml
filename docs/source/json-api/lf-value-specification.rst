@@ -1,4 +1,4 @@
-.. Copyright (c) 2020 The DAML Authors. All rights reserved.
+.. Copyright (c) 2020 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
 .. SPDX-License-Identifier: Apache-2.0
 
 DAML-LF JSON Encoding
@@ -291,14 +291,24 @@ Lists are represented as
 
     [v₁, ..., vₙ]
 
-Map
-***
+TextMap
+*******
 
-Maps are represented as objects:
+TextMaps are represented as objects:
 
 ::
 
     { k₁: v₁, ..., kₙ: vₙ }
+
+GenMap
+******
+
+GenMaps are represented as lists of pairs::
+
+    [ [k₁, v₁], [kₙ, vₙ] ]
+
+Order does not matter.  However, any duplicate keys will cause the map
+to be treated as invalid.
 
 Optional
 ********

@@ -1,15 +1,15 @@
-// Copyright (c) 2020 The DAML Authors. All rights reserved.
+// Copyright (c) 2020 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-package com.digitalasset.daml.lf.speedy.svalue
+package com.daml.lf.speedy.svalue
 
 import java.util
 
-import com.digitalasset.daml.lf.data.{FrontStack, Numeric, Ref, Time}
-import com.digitalasset.daml.lf.language.{Ast, Util => AstUtil}
-import com.digitalasset.daml.lf.speedy.SValue._
-import com.digitalasset.daml.lf.speedy.{SBuiltin, SExpr, SValue}
-import com.digitalasset.daml.lf.value.Value.{AbsoluteContractId, NodeId, RelativeContractId}
+import com.daml.lf.data.{FrontStack, Numeric, Ref, Time}
+import com.daml.lf.language.{Ast, Util => AstUtil}
+import com.daml.lf.speedy.SValue._
+import com.daml.lf.speedy.{SBuiltin, SExpr, SValue}
+import com.daml.lf.value.Value.{AbsoluteContractId, NodeId, RelativeContractId}
 import org.scalatest.prop.{TableDrivenPropertyChecks, TableFor1, TableFor2}
 import org.scalatest.{Matchers, WordSpec}
 import scalaz._
@@ -63,8 +63,7 @@ class EqualitySpec extends WordSpec with Matchers with TableDrivenPropertyChecks
   private val parties =
     List("alice", "bob").map(SParty compose Ref.Party.assertFromString)
   private val absoluteContractId =
-    List("a", "b")
-      .map(x => SContractId(AbsoluteContractId(Ref.ContractIdString.assertFromString(x))))
+    List("a", "b").map(x => SContractId(AbsoluteContractId.assertFromString("#" + x)))
   private val relativeContractId =
     List(0, 1).map(x => SContractId(RelativeContractId(NodeId(x))))
   private val contractIds = absoluteContractId ++ relativeContractId
@@ -177,7 +176,7 @@ class EqualitySpec extends WordSpec with Matchers with TableDrivenPropertyChecks
 
   private val funs = List(
     lfFunction,
-    SPAP(PClosure(SExpr.SEVar(2), Array()), ArrayList(SValue.SValue.Unit), 2),
+    SPAP(PClosure(null, SExpr.SEVar(2), Array()), ArrayList(SValue.SValue.Unit), 2),
   )
 
   private def nonEquatableLists(atLeast2InEquatableValues: List[SValue]) = {

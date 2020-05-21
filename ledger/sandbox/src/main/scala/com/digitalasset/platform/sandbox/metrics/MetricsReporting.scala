@@ -1,32 +1,30 @@
-// Copyright (c) 2020 The DAML Authors. All rights reserved.
+// Copyright (c) 2020 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-package com.digitalasset.platform.sandbox.metrics
+package com.daml.platform.sandbox.metrics
 
 import java.time.Duration
 import java.util.concurrent.TimeUnit
 
 import com.codahale.metrics.Slf4jReporter.LoggingLevel
-import com.codahale.metrics.graphite.{Graphite, GraphiteReporter}
 import com.codahale.metrics.jmx.JmxReporter
-import com.codahale.metrics.{
-  ConsoleReporter,
-  CsvReporter,
-  MetricRegistry,
-  Reporter,
-  ScheduledReporter,
-  Slf4jReporter
-}
-import com.digitalasset.resources.{Resource, ResourceOwner}
+import com.codahale.metrics.{MetricRegistry, Reporter, Slf4jReporter}
+import com.daml.metrics.{JvmMetricSet, Metrics}
+import com.daml.platform.configuration.MetricsReporter
+import com.daml.resources.{Resource, ResourceOwner}
 
 import scala.concurrent.{ExecutionContext, Future}
 
 /** Manages metrics and reporters.
   *
+  * Creates the [[MetricRegistry]].
+  *
+  * All out-of-the-box JVM metrics are added to the registry.
+  *
   * Creates at least two reporters:
   *
-  *   - A JmxReporter, which exposes metrics over JMX
-  *   - An Slf4jReporter, which logs metrics on shutdown at DEBUG level
+  *   - a [[JmxReporter]], which exposes metrics over JMX, and
+  *   - an [[Slf4jReporter]], which logs metrics on shutdown at DEBUG level.
   *
   * Also optionally creates the reporter specified in the constructor.
   *
@@ -37,40 +35,22 @@ final class MetricsReporting(
     jmxDomain: String,
     extraMetricsReporter: Option[MetricsReporter],
     extraMetricsReportingInterval: Duration,
-) extends ResourceOwner[MetricRegistry] {
-  def acquire()(implicit executionContext: ExecutionContext): Resource[MetricRegistry] = {
+) extends ResourceOwner[Metrics] {
+  def acquire()(implicit executionContext: ExecutionContext): Resource[Metrics] = {
     val registry = new MetricRegistry
+    registry.registerAll(new JvmMetricSet)
     for {
       slf4JReporter <- acquire(newSlf4jReporter(registry))
       _ <- acquire(newJmxReporter(registry))
         .map(_.start())
       _ <- extraMetricsReporter.fold(Resource.unit) { reporter =>
-        acquire(newReporter(reporter, registry))
+        acquire(reporter.register(registry))
           .map(_.start(extraMetricsReportingInterval.getSeconds, TimeUnit.SECONDS))
       }
       // Trigger a report to the SLF4J logger on shutdown.
       _ <- Resource(Future.successful(slf4JReporter))(reporter =>
         Future.successful(reporter.report()))
-    } yield {
-      registry
-    }
-  }
-
-  private def newReporter(reporter: MetricsReporter, registry: MetricRegistry)(
-      implicit executionContext: ExecutionContext
-  ): ScheduledReporter = reporter match {
-    case MetricsReporter.Console =>
-      ConsoleReporter
-        .forRegistry(registry)
-        .build()
-    case MetricsReporter.Csv(directory) =>
-      CsvReporter
-        .forRegistry(registry)
-        .build(directory.toFile)
-    case MetricsReporter.Graphite(address) =>
-      GraphiteReporter
-        .forRegistry(registry)
-        .build(new Graphite(address))
+    } yield new Metrics(registry)
   }
 
   private def newJmxReporter(registry: MetricRegistry): JmxReporter =

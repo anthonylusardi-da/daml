@@ -1,4 +1,4 @@
--- Copyright (c) 2020 The DAML Authors. All rights reserved.
+-- Copyright (c) 2020 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
 -- SPDX-License-Identifier: Apache-2.0
 
 {-# LANGUAGE ConstraintKinds #-}
@@ -22,7 +22,7 @@ import Data.Int
 import Text.Read
 import           Data.List
 import           DA.Daml.LF.Mangling
-import qualified Com.Digitalasset.DamlLfDev.DamlLf1 as LF1
+import qualified Com.Daml.DamlLfDev.DamlLf1 as LF1
 import qualified Data.NameMap as NM
 import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL

@@ -1,7 +1,7 @@
-// Copyright (c) 2020 The DAML Authors. All rights reserved.
+// Copyright (c) 2020 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-package com.digitalasset.platform.apiserver.services.admin
+package com.daml.platform.apiserver.services.admin
 
 import akka.stream.Materializer
 import akka.stream.scaladsl.Sink
@@ -13,17 +13,18 @@ import com.daml.ledger.participant.state.v1.{
   SubmissionResult,
   WriteConfigService
 }
-import com.digitalasset.api.util.{DurationConversion, TimeProvider, TimestampConversion}
-import com.digitalasset.daml.lf.data.Time
-import com.digitalasset.dec.{DirectExecutionContext => DE}
-import com.digitalasset.ledger.api.domain
-import com.digitalasset.ledger.api.domain.LedgerOffset
-import com.digitalasset.ledger.api.v1.admin.config_management_service.ConfigManagementServiceGrpc.ConfigManagementService
-import com.digitalasset.ledger.api.v1.admin.config_management_service._
-import com.digitalasset.logging.{ContextualizedLogger, LoggingContext}
-import com.digitalasset.platform.api.grpc.GrpcApiService
-import com.digitalasset.platform.server.api.validation
-import com.digitalasset.platform.server.api.validation.ErrorFactories
+import com.daml.api.util.{DurationConversion, TimeProvider, TimestampConversion}
+import com.daml.lf.data.Time
+import com.daml.dec.{DirectExecutionContext => DE}
+import com.daml.ledger.api.domain
+import com.daml.ledger.api.domain.LedgerOffset
+import com.daml.ledger.api.v1.admin.config_management_service.ConfigManagementServiceGrpc.ConfigManagementService
+import com.daml.ledger.api.v1.admin.config_management_service._
+import com.daml.logging.{ContextualizedLogger, LoggingContext}
+import com.daml.platform.api.grpc.GrpcApiService
+import com.daml.platform.configuration.LedgerConfiguration
+import com.daml.platform.server.api.validation
+import com.daml.platform.server.api.validation.ErrorFactories
 import io.grpc.{ServerServiceDefinition, StatusRuntimeException}
 
 import scala.compat.java8.FutureConverters
@@ -35,7 +36,7 @@ final class ApiConfigManagementService private (
     index: IndexConfigManagementService,
     writeService: WriteConfigService,
     timeProvider: TimeProvider,
-    defaultConfiguration: Configuration,
+    ledgerConfiguration: LedgerConfiguration,
     materializer: Materializer
 )(implicit logCtx: LoggingContext)
     extends ConfigManagementService
@@ -43,7 +44,7 @@ final class ApiConfigManagementService private (
 
   private val logger = ContextualizedLogger.get(this.getClass)
 
-  private val defaultConfigResponse = configToResponse(defaultConfiguration)
+  private val defaultConfigResponse = configToResponse(ledgerConfiguration.initialConfiguration)
 
   override def close(): Unit = ()
 
@@ -62,9 +63,9 @@ final class ApiConfigManagementService private (
       configurationGeneration = config.generation,
       timeModel = Some(
         TimeModel(
-          minTransactionLatency = Some(DurationConversion.toProto(tm.minTransactionLatency)),
-          maxClockSkew = Some(DurationConversion.toProto(tm.maxClockSkew)),
-          maxTtl = Some(DurationConversion.toProto(tm.maxTtl))
+          avgTransactionLatency = Some(DurationConversion.toProto(tm.avgTransactionLatency)),
+          minSkew = Some(DurationConversion.toProto(tm.minSkew)),
+          maxSkew = Some(DurationConversion.toProto(tm.maxSkew))
         ))
     )
   }
@@ -81,7 +82,9 @@ final class ApiConfigManagementService private (
       // Lookup latest configuration to check generation and to extend it with the new time model.
       optConfigAndOffset <- index.lookupConfiguration()
       pollOffset = optConfigAndOffset.map(_._1)
-      currentConfig = optConfigAndOffset.map(_._2).getOrElse(defaultConfiguration)
+      currentConfig = optConfigAndOffset
+        .map(_._2)
+        .getOrElse(ledgerConfiguration.initialConfiguration)
 
       // Verify that we're modifying the current configuration.
       _ <- if (request.configurationGeneration != currentConfig.generation) {
@@ -109,9 +112,7 @@ final class ApiConfigManagementService private (
       result <- submissionResult match {
         case SubmissionResult.Acknowledged =>
           // Ledger acknowledged. Start polling to wait for the result to land in the index.
-          val maxTtl = Duration.fromNanos(currentConfig.timeModel.maxTtl.toNanos)
-          val timeToLive = if (params.timeToLive < maxTtl) params.timeToLive else maxTtl
-          pollUntilPersisted(request.submissionId, pollOffset, timeToLive).flatMap {
+          pollUntilPersisted(request.submissionId, pollOffset, params.timeToLive).flatMap {
             case accept: domain.ConfigurationEntry.Accepted =>
               Future.successful(SetTimeModelResponse(accept.configuration.generation))
             case rejected: domain.ConfigurationEntry.Rejected =>
@@ -141,18 +142,15 @@ final class ApiConfigManagementService private (
     import validation.FieldValidations._
     for {
       pTimeModel <- requirePresence(request.newTimeModel, "new_time_model")
-      pMinTransactionLatency <- requirePresence(
-        pTimeModel.minTransactionLatency,
-        "min_transaction_latency")
-      pMaxClockSkew <- requirePresence(pTimeModel.maxClockSkew, "max_clock_skew")
-      pMaxTtl <- requirePresence(pTimeModel.maxTtl, "max_ttl")
+      pAvgTransactionLatency <- requirePresence(
+        pTimeModel.avgTransactionLatency,
+        "avg_transaction_latency")
+      pMinSkew <- requirePresence(pTimeModel.minSkew, "min_skew")
+      pMaxSkew <- requirePresence(pTimeModel.maxSkew, "max_skew")
       newTimeModel <- v1.TimeModel(
-        minTransactionLatency = DurationConversion.fromProto(pMinTransactionLatency),
-        maxClockSkew = DurationConversion.fromProto(pMaxClockSkew),
-        maxTtl = DurationConversion.fromProto(pMaxTtl),
-        avgTransactionLatency = java.time.Duration.ZERO,
-        minSkew = java.time.Duration.ZERO,
-        maxSkew = java.time.Duration.ZERO,
+        avgTransactionLatency = DurationConversion.fromProto(pAvgTransactionLatency),
+        minSkew = DurationConversion.fromProto(pMinSkew),
+        maxSkew = DurationConversion.fromProto(pMaxSkew),
       ) match {
         case Failure(err) => Left(ErrorFactories.invalidArgument(err.toString))
         case Success(ok) => Right(ok)
@@ -178,8 +176,8 @@ final class ApiConfigManagementService private (
     index
       .configurationEntries(offset)
       .collect {
-        case entry @ domain.ConfigurationEntry.Accepted(`submissionId`, _, _) => entry
-        case entry @ domain.ConfigurationEntry.Rejected(`submissionId`, _, _, _) => entry
+        case (_, entry @ domain.ConfigurationEntry.Accepted(`submissionId`, _, _)) => entry
+        case (_, entry @ domain.ConfigurationEntry.Rejected(`submissionId`, _, _, _)) => entry
       }
       .completionTimeout(timeToLive)
       .runWith(Sink.head)(materializer)
@@ -196,13 +194,13 @@ object ApiConfigManagementService {
       readBackend: IndexConfigManagementService,
       writeBackend: WriteConfigService,
       timeProvider: TimeProvider,
-      defaultConfiguration: Configuration)(implicit mat: Materializer, logCtx: LoggingContext)
+      ledgerConfiguration: LedgerConfiguration)(implicit mat: Materializer, logCtx: LoggingContext)
     : ConfigManagementServiceGrpc.ConfigManagementService with GrpcApiService =
     new ApiConfigManagementService(
       readBackend,
       writeBackend,
       timeProvider,
-      defaultConfiguration,
+      ledgerConfiguration,
       mat)
 
 }

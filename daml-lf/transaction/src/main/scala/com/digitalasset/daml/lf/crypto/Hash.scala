@@ -1,15 +1,16 @@
-// Copyright (c) 2020 The DAML Authors. All rights reserved.
+// Copyright (c) 2020 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-package com.digitalasset.daml.lf
+package com.daml.lf
 package crypto
 
 import java.nio.ByteBuffer
-import java.security.{MessageDigest, SecureRandom}
+import java.security.MessageDigest
 import java.util.concurrent.atomic.AtomicLong
 
-import com.digitalasset.daml.lf.data.{Bytes, ImmArray, Ref, Time, Utf8}
-import com.digitalasset.daml.lf.value.Value
+import com.daml.lf.data.{Bytes, ImmArray, Ref, Time, Utf8}
+import com.daml.lf.value.Value
+import scalaz.Order
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 
@@ -31,8 +32,8 @@ final class Hash private (val bytes: Bytes) {
 
 object Hash {
 
-  private val version = 0.toByte
-  private val underlyingHashLength = 32
+  val version = 0.toByte
+  val underlyingHashLength = 32
 
   private case class HashingError(msg: String) extends Exception with NoStackTrace
 
@@ -62,28 +63,27 @@ object Hash {
   def assertFromByteArray(a: Array[Byte]): Hash =
     data.assertRight(fromByteArray(a))
 
-  // A pseudo random generator for Hash based on hmac
-  // We mix the given seed with time to mitigate very bad seed.
-  def random(seed: Hash): () => Hash = {
+  // A cryptographic pseudo random generator of Hashes based on hmac
+  // Must be given a high entropy seed when used in production.
+  // Thread safe
+  def secureRandom(seed: Hash): () => Hash = {
     val counter = new AtomicLong
-    val seedWithTime =
-      hMacBuilder(seed).add(Time.Timestamp.now().micros).build
     () =>
-      hMacBuilder(seedWithTime).add(counter.getAndIncrement()).build
+      hMacBuilder(seed).add(counter.getAndIncrement()).build
   }
 
-  // A pseudo random generator for Hash using the best available source of entropy to generate the seed.
-  def secureRandom: () => Hash =
-    random(assertFromByteArray(SecureRandom.getInstanceStrong.generateSeed(underlyingHashLength)))
-
-  implicit val `Hash Ordering`: Ordering[Hash] =
+  implicit val ordering: Ordering[Hash] =
     Ordering.by(_.bytes)
 
+  implicit val order: Order[Hash] = Order.fromScalaOrdering
+
   @throws[HashingError]
-  private[lf] val aCid2String: Value.ContractId => String = {
-    case (Value.AbsoluteContractId(cid)) =>
-      cid
-    case (Value.RelativeContractId(_)) =>
+  private[lf] val aCid2Bytes: Value.ContractId => Bytes = {
+    case cid @ Value.AbsoluteContractId.V1(_, _) =>
+      cid.toBytes
+    case Value.AbsoluteContractId.V0(s) =>
+      Utf8.getBytes(s)
+    case Value.RelativeContractId(_) =>
       error("Hashing of relative contract id is not supported")
   }
 
@@ -91,7 +91,7 @@ object Hash {
   private[lf] val noCid2String: Value.ContractId => Nothing =
     _ => error("Hashing of relative contract id is not supported in contract key")
 
-  private[crypto] sealed abstract class Builder(cid2String: Value.ContractId => String) {
+  private[crypto] sealed abstract class Builder(cid2Bytes: Value.ContractId => Bytes) {
 
     protected def update(a: ByteBuffer): Unit
 
@@ -175,8 +175,11 @@ object Hash {
     }
 
     @throws[HashingError]
-    final def addCid(cid: Value.ContractId): this.type =
-      add(cid2String(cid))
+    final def addCid(cid: Value.ContractId): this.type = {
+      val bytes = cid2Bytes(cid)
+      add(bytes.length)
+      add(bytes)
+    }
 
     // In order to avoid hash collision, this should be used together
     // with another data representing uniquely the type of `value`.
@@ -232,6 +235,7 @@ object Hash {
   private[crypto] object Purpose {
     val Testing = Purpose(1)
     val ContractKey = Purpose(2)
+    val MaintainerContractKeyUUID = Purpose(4)
     val PrivateKey = Purpose(3)
   }
 
@@ -239,8 +243,8 @@ object Hash {
   // Do not call this method from outside Hash object/
   private[crypto] def builder(
       purpose: Purpose,
-      cid2String: Value.ContractId => String,
-  ): Builder = new Builder(cid2String) {
+      cid2Bytes: Value.ContractId => Bytes,
+  ): Builder = new Builder(cid2Bytes) {
 
     private val md = MessageDigest.getInstance("SHA-256")
 
@@ -355,4 +359,13 @@ object Hash {
       .addStringSet(parties)
       .build
 
+  // For DAML-on-Corda to ensure the hashing is performed in a way that will work with upgrades.
+  def deriveMaintainerContractKeyUUID(
+      keyHash: Hash,
+      maintainer: Ref.Party,
+  ): Hash =
+    builder(Purpose.MaintainerContractKeyUUID, noCid2String)
+      .add(keyHash)
+      .add(maintainer)
+      .build
 }
